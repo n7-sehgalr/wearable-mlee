@@ -1,0 +1,7 @@
+name: phd
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - anaconda::pyserial
+  - anaconda::pandas

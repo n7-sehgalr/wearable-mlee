@@ -1,0 +1,8 @@
+external/creegan_EIT/EIT-Device-Firmware/_build/*
+external/creegan_EIT/EIT-Device-Firmware/drivers/cmsis/DSP
+external/creegan_EIT/EIT-Device-Firmware/drivers/cmsis/NN
+drivers/cmsis/RTOS
+
+.vscode/
+
+env.cmd
