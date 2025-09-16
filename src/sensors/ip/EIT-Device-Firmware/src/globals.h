@@ -67,7 +67,7 @@ uint32_t g_iSample_cycles               = 10;
 
 uint32_t const g_iSamples_per_cycle_min = 2;
 uint32_t const g_iSamples_per_cycle_max = 20;
-uint32_t g_iSamples_per_cycle           = 10;
+uint32_t g_iSamples_per_cycle           = 3; // Target frequency = ~83kHz
 
 uint32_t const g_iSample_rubbish_min    = 1;
 uint32_t const g_iSample_rubbish_max    = 100;
@@ -87,7 +87,7 @@ uint32_t g_iADC_frequency     = 249938; // A.C. Measured 2023-05-16
 float    g_fADC_frequency     = 249937.5; // A.C. Measured 2023-05-16
 uint32_t g_iTarget_frequency  = g_iADC_frequency / g_iSamples_per_cycle;
 float    g_fTarget_frequency  = g_fADC_frequency / g_iSamples_per_cycle;
-float    g_iTarget_period_us  = ( 1.0 / g_fTarget_frequency ) / 1000000.0;
+float    g_iTarget_period_us  = ( 1.0 / g_fTarget_frequency ) * 1000000.0;
 uint32_t g_iSamples_useful    = g_iSamples_per_cycle * g_iSample_cycles;
 uint32_t g_iSamples           = g_iSamples_useful + g_iSample_rubbish;
 
@@ -102,7 +102,7 @@ void recalculateGlobals()
 {
     g_iTarget_frequency  = g_iADC_frequency / g_iSamples_per_cycle;
     g_fTarget_frequency  = g_fADC_frequency / g_iSamples_per_cycle;
-    g_iTarget_period_us  = ( 1.0 / g_fTarget_frequency ) / 1000000.0;
+    g_iTarget_period_us  = ( 1.0 / g_fTarget_frequency ) * 1000000.0;
     g_iSamples_useful    = g_iSamples_per_cycle * g_iSample_cycles;
     g_iSamples           = g_iSamples_useful + g_iSample_rubbish;
 
