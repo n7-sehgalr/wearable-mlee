@@ -6,6 +6,8 @@
 
 The initial commit includes the original firmware source code (<url>https://github.com/ABI-EIT/EIT-Device-Firmware</url>) which is modified slightly in later commits to fit the requirements of current study.
 
+After the modifications and installation of the mentioned tool versions, the set_env.cmd is run which successfully found the paths.  
+
 #### Modifications:
 
 <ul>
