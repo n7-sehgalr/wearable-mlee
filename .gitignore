@@ -1,3 +1,10 @@
 data/
 codeassist/
 external/
+
+src/sensors/ip/EIT-Device-Firmware/_build/*
+src/sensors/ip/EIT-Device-Firmware/drivers/cmsis/DSP
+src/sensors/ip/EIT-Device-Firmware/drivers/cmsis/NN
+src/sensors/ip/drivers/cmsis/RTOS
+
+src/sensors/ip/env.cmd
