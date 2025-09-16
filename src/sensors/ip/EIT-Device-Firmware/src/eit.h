@@ -68,79 +68,43 @@ void collect_eit_frame()
     senseAMux.enable(false);
     senseBMux.enable(false);
 
-    // Loop over all driving pairs
-    for(
-            // Start from the 0th electrode
-            unsigned int drivingElectrode = 0, 
-                          groundElectrode = ( drivingElectrode + g_iDrivingDist ) % g_iElectrodes;
 
-            // Do all the electrodes pairs
-            drivingElectrode < g_iElectrodes;
+    unsigned int drivingElectrode = 0, groundElectrode = 1; // Physical pins 1, 3
 
-            // Rotate by 1 each iteration
-            groundElectrode  = ( ( ++drivingElectrode ) + g_iDrivingDist ) % g_iElectrodes // Update both the source and ground positions at the same time
-        )
-    {
-        // Connect the selected driving pair
-        driveSourceMux.select((ADG732::Channel) transformElectrode(drivingElectrode)); // Setup the drive current "+/source" multiplexer
-        driveGroundMux.select((ADG732::Channel) transformElectrode(groundElectrode )); // Setup the drive current "-/ground" multiplexer
-        driveGroundMux.enable(true); driveSourceMux.enable(true); // Enable both drive current multiplexers
 
-        // TODO: include drive settling delay
+    // Connect the selected driving pair
+    driveSourceMux.select((ADG732::Channel) transformElectrode(drivingElectrode)); // Setup the drive current "+/source" multiplexer
+    driveGroundMux.select((ADG732::Channel) transformElectrode(groundElectrode )); // Setup the drive current "-/ground" multiplexer
+    driveGroundMux.enable(true); driveSourceMux.enable(true); // Enable both drive current multiplexers
 
-        // Loop over all sensing pairs for the current driving arrangement :
-        for (   // Sensing pairs start immediately after the driving electrode
-                unsigned int senseAElectrode = (drivingElectrode + g_iInitialDriveSenseDist) % g_iElectrodes,
-                             senseBElectrode = (senseAElectrode  + g_iSensingDist) % g_iElectrodes;
+    unsigned int senseAElectrode = 2, senseBElectrode = 3; // Physical pins 5, 7
+    // TODO: include drive settling delay
 
-                // Continue until we reach the driving electrode
-                (    ( senseAElectrode != drivingElectrode ) 
-                  && ( senseBElectrode != drivingElectrode ) );
+    // Connect the selected sensing pair
+    senseAMux.select((ADG732::Channel) transformElectrode(senseAElectrode)); // Setup the sense "A" multiplexer
+    senseBMux.select((ADG732::Channel) transformElectrode(senseBElectrode)); // Setup the sense "B" multiplexer
+    senseAMux.enable(true); senseBMux.enable(true); // Enable both sense multiplexers
 
-                // Rotate by one each iteration
-                senseBElectrode = (   ( senseAElectrode = ( senseAElectrode + 1 ) % g_iElectrodes )  // Update both the senseA and senseB positions at the same time
-                                      + g_iSensingDist ) % g_iElectrodes 
-            )
-        {
-            // Skip measurements involving the driving electrodes
-            if (    ( groundElectrode == senseAElectrode )
-                 || ( groundElectrode == senseBElectrode ) )
-            {
-                continue;
-            }
+    // Trigger and wait for ADC operation
+    adc_collect_samples(const_cast<uint32_t * >(g_aiSamples), g_iSamples);
 
-            // Connect the selected sensing pair
-            senseAMux.select((ADG732::Channel) transformElectrode(senseAElectrode)); // Setup the sense "A" multiplexer
-            senseBMux.select((ADG732::Channel) transformElectrode(senseBElectrode)); // Setup the sense "B" multiplexer
-            senseAMux.enable(true); senseBMux.enable(true); // Enable both sense multiplexers
+    // Calculate magnitude
+    float magnitude = eit_iq_demodulation ( 
+        const_cast<uint32_t const * >(&g_aiSamples[g_iSample_rubbish]), // Ignore "rubbish" samples. (impacted by mux settling time)
+        g_iSamples_useful, 
+        g_iSamples_per_cycle);
+    // TODO: calculate Z using the phase offset
+    // Z = complex division of Voltage and Current
 
-            // Trigger and wait for ADC operation
-            adc_collect_samples(const_cast<uint32_t * >(g_aiSamples), g_iSamples);
+    // Write output to usb and flush immediately so that USB interrupts do not impact ADC timings
+    Serial.print(magnitude, 4); Serial.print(", ");Serial.flush();
 
-            // Disable both sensing multiplexers
-            senseAMux.enable(false); senseBMux.enable(false);
 
-            // Calculate magnitude
-            float magnitude = eit_iq_demodulation ( 
-                const_cast<uint32_t const * >(&g_aiSamples[g_iSample_rubbish]), // Ignore "rubbish" samples. (impacted by mux settling time)
-                g_iSamples_useful, 
-                g_iSamples_per_cycle);
+    // Disable both drive and sensing multiplexers
+    driveSourceMux.enable(false);
+    driveGroundMux.enable(false);
+    senseAMux.enable(false);
+    senseBMux.enable(false);
 
-            // TODO: calculate Z using the phase offset
-            // Z = complex division of Voltage and Current
-
-            result_counter++;
-
-            // Write output to usb and flush immediately so that USB interrupts do not impact ADC timings
-            Serial.print(magnitude, 4); Serial.print(", ");Serial.flush();
-        }
-
-        // Disable both drive and sensing multiplexers
-        driveSourceMux.enable(false);
-        driveGroundMux.enable(false);
-        senseAMux.enable(false);
-        senseBMux.enable(false);
-
-    }
     Serial.print("\r\n");
 }

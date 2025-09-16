@@ -47,7 +47,7 @@ uint32_t g_iDelay_ms   = 1000L;
 
 uint32_t const g_iElectrodes_min = 4;
 uint32_t const g_iElectrodes_max = 32;
-uint32_t g_iElectrodes = 16;
+uint32_t g_iElectrodes = 4;
 
 uint32_t g_iDrivingDist = 3; // Forced to sit between 1 and g_iElectrodes/2
 
