@@ -6,7 +6,22 @@
 
 The initial commit includes the original firmware source code (<url>https://github.com/ABI-EIT/EIT-Device-Firmware</url>) which is modified slightly in later commits to fit the requirements of current study.
 
-After the modifications and installation of the mentioned tool versions, the set_env.cmd is run which successfully found the paths. The generate_makefiles.bat is run successfully followed by make_debug.bat. The .hex file is located at _build/debug/firmware.debug.hex. Use the Teensy loader to upload it on the Teensy.
+After the modifications and installation of the mentioned tool versions, env.cmd is created with the following:
+```powershell
+@echo off
+
+# Path to GNU Arm Embedded Toolchain
+set ARMGCC_DIR=<Path>  # E.g. C:\Program Files (x86)\Arm GNU Toolchain arm-none-eabi\11.2 2022.02
+
+# Path to MinGW
+set MinGW_DIR=<Path>  #E.g. C:\MinGW in my case
+
+# Path to CMake
+set CMAKE_DIR=<Path to CMake> #E.g. C:\Program Files\CMake
+
+```
+
+Now the set_env.cmd is run which successfully found the paths. The generate_makefiles.bat is run successfully followed by make_debug.bat. The .hex file is located at _build/debug/firmware.debug.hex. Use the Teensy loader to upload it on the Teensy.
 
 Arduino IDE
 Install Arduino IDE and follow instructions on: <url>https://www.pjrc.com/teensy/td_download.html</url> for the Teensy board manager. The latest version is installed (1.59.0). The Arduio IDE Serial monitor can be utilized for initial checks 

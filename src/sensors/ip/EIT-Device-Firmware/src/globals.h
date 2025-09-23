@@ -47,7 +47,7 @@ uint32_t g_iDelay_ms   = 1000L;
 
 uint32_t const g_iElectrodes_min = 4;
 uint32_t const g_iElectrodes_max = 32;
-uint32_t g_iElectrodes = 4;
+uint32_t g_iElectrodes = 16;
 
 uint32_t g_iDrivingDist = 3; // Forced to sit between 1 and g_iElectrodes/2
 
@@ -67,7 +67,7 @@ uint32_t g_iSample_cycles               = 10;
 
 uint32_t const g_iSamples_per_cycle_min = 2;
 uint32_t const g_iSamples_per_cycle_max = 20;
-uint32_t g_iSamples_per_cycle           = 3; // Target frequency = ~83kHz
+uint32_t g_iSamples_per_cycle           = 10; // Target frequency = 25kHz
 
 uint32_t const g_iSample_rubbish_min    = 1;
 uint32_t const g_iSample_rubbish_max    = 100;
