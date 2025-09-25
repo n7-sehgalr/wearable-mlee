@@ -1,5 +1,4 @@
 import sys
-sys.path.append(r"D:\Python\Lib\site-packages")  # Adjusted path
 import serial
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets
@@ -12,7 +11,7 @@ ser = serial.Serial('COM3', 115200, timeout=1)
 # Setup pyqtgraph
 app = QtWidgets.QApplication([])
 win = pg.GraphicsLayoutWidget(show=True)
-plot = win.addPlot(title="Voltage generated from 98uA @ 62.5KHz")
+plot = win.addPlot(title="Voltage generated from 98uA @ 25KHz")
 
 # Enable grid
 plot.showGrid(x=True, y=True)  # Show grid for both x and y axes

@@ -307,6 +307,7 @@ bool processCommands()
     // Is there anything in the input buffer
     if( Serial.peek() == -1 ) return false;
     
+    SDK_DelayAtLeastUs(g_iDelay_ms * 1000, SystemCoreClock);
     // TODO: use state machine to manage timeout (infinate time time out until newline is pushed)
     String commandString = Serial.readStringUntil('\n').toLowerCase().trim();
 

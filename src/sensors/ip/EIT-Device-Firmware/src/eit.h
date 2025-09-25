@@ -83,8 +83,7 @@ void collect_eit_frame()
         senseAMux.select((ADG732::Channel) transformElectrode(senseAElectrode)); // Setup the sense "A" multiplexer
         senseBMux.select((ADG732::Channel) transformElectrode(senseBElectrode)); // Setup the sense "B" multiplexer
         senseAMux.enable(true); senseBMux.enable(true); // Enable both sense multiplexers
-        for(;;)
-        {
+        
         // Trigger and wait for ADC operation
         adc_collect_samples(const_cast<uint32_t * >(g_aiSamples), g_iSamples);
 
@@ -107,5 +106,4 @@ void collect_eit_frame()
         // senseBMux.enable(false);
 
         Serial.print("\r\n");
-        }
     }

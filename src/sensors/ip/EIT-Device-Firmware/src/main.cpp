@@ -71,9 +71,11 @@ extern "C" int main()
     // this is to not confuse any application that ..
 
     SL(); // Print empty comment line
-    for(auto c : logo) {Serial.print(c);} // Print the logo character by character.. (wHY loop?)
-    deviceInfo(); // Print device information (using the device information command)
+    // for(auto c : logo) {Serial.print(c);} // Print the logo character by character.. (wHY loop?)
+    // deviceInfo(); // Print device information (using the device information command)
+    getAll("all");
     SDK_DelayAtLeastUs(g_iStartupDelay_ms * 1000, SystemCoreClock); // Give the user time (g_iStartupDelay_ms) to see the logo
+
     
     // Main Loop
     for (;;)
@@ -87,15 +89,17 @@ extern "C" int main()
         if (g_bRun) { // Is there an active task
             g_ModeFunctions[g_eMode](); // Run the desired task
         }
-        BOARD_LED_OFF();
+        
 
         // Wait between task executions (g_iDelay_ms)
-        SDK_DelayAtLeastUs(g_iDelay_ms * 1000, SystemCoreClock); // TODO: use the system tick counter to be hard real time
+        // SDK_DelayAtLeastUs(g_iDelay_ms * 1000, SystemCoreClock); // TODO: use the system tick counter to be hard real time
         
         // Check if we have recieved any commands via the serial port and act on them
         processCommands();
     }
 
+    BOARD_LED_OFF();
+    
     return 0;
 }
 
