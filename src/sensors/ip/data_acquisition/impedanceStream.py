@@ -18,13 +18,23 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("My App")
         button = QPushButton("Press Me!")
 
-        # self.setFixedSize(QSize(400, 300))
-        # Set minimum size of the window
-        self.setMinimumSize(800, 600)
+        # Signals - notifications emitted by widgets
+        # Slots - receiver of signals, can by any function or method
 
-        # Widget that goes in middle of window
+        # clicked signal connected to slot called the_button_was_clicked
+        button.setCheckable(True)
+        button.clicked.connect(self.the_button_was_clicked)
+        
+        # We can also send data to slots, checkstate in this case
+        button.clicked.connect(self.the_button_was_toggled)
+
         self.setCentralWidget(button)
 
+    def the_button_was_clicked(self):
+        print("Clicked!")
+
+    def the_button_was_toggled(self, check): # Receives check input from the signal
+        print("Checked?", check)
 # An instance of QApplicaiton
 app = QApplication([])
 
