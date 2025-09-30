@@ -6,7 +6,19 @@
 
 # QWidget: Basic empty GUI widget
 
-from PyQt5.QtWidgets import QApplication, QMainWindow
+from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton
+
+# Custom window, use subclass and include setup for window in the __init__
+class MainWindow(QMainWindow):
+    # Inherits from QMainWindow
+    def __init__(self):
+        super().__init__()
+
+        self.setWindowTitle("My App")
+        button = QPushButton("Press Me!")
+
+        # Widget that goes in middle of window
+        self.setCentralWidget(button)
 
 # An instance of QApplicaiton
 app = QApplication([])
@@ -15,7 +27,7 @@ app = QApplication([])
 # QMainWindow -> Pre-made widget, with lots of standard window features like toolbars, menus, dockable widgets, etc.
 # Top level widgets are windows, don't have a parent and not nested within another widget
 # We can create a window with any widget
-window = QMainWindow()
+window = MainWindow()
 
 # Widgets without parent, invisible by default. So need to call .show()
 # Need at least one window, can have more
