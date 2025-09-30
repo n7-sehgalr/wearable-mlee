@@ -6,6 +6,7 @@
 
 # QWidget: Basic empty GUI widget
 
+from PyQt6.QtCore import QSize, Qt # QSize used to define sizes
 from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton
 
 # Custom window, use subclass and include setup for window in the __init__
@@ -16,6 +17,10 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("My App")
         button = QPushButton("Press Me!")
+
+        # self.setFixedSize(QSize(400, 300))
+        # Set minimum size of the window
+        self.setMinimumSize(800, 600)
 
         # Widget that goes in middle of window
         self.setCentralWidget(button)
