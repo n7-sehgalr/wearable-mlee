@@ -1,101 +1,126 @@
-# QApplication: Appication handler, one and only one needed for each application
-# This object holds event loop of application, core loop that governs all interaction in GUI
-# Each event - key press or mouse click or movement generates event -> put on event queue -> in event loop each iteration checks queue
-# If event waiting -> pass control to specific event handler for that event -> event handler deals with it then pass control back to event loop
-# Only one event loop running per application
+import matplotlib
+import random
+matplotlib.use('QtAgg')
 
-# QWidget: Basic empty GUI widget
+from PyQt6 import QtCore, QtWidgets
+from matplotlib.figure import Figure
 
-from PyQt6.QtCore import QSize, Qt # QSize used to define sizes
-from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton
+# FigureCanvasQTAgg sets up a matplotlib canvas which creates the
+# Figure and adds single set of axes to it. It is also a QWidget 
+# so it can be embedded into an application
 
-from random import choice
+# Plots in PyQt are rendered as bitmap images on the widget 
+# and Qt is unaware of position of lines and other elements. 
+# Qt mouse events and transforming them to actions in built in matplotlib.
+# This is controlled through custom toolbar that can be added with NavigationToolbar2QT
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT as NavigationToolbar
+from matplotlib.figure import Figure
 
-window_titles = [
-    'My App',
-    'My App',
-    'Still My App',
-    'Something went wrong'
-]
+# User defined MplCanvas inheriting from FigureCanvasQTAgg widget
+class MplCanvas(FigureCanvasQTAgg):
 
-# Custom window, use subclass and include setup for window in the __init__
-class MainWindow(QMainWindow):
-    # Inherits from QMainWindow
-    def __init__(self):
-        super().__init__()
+    # parent receives self from MainWindow
+    def __init__(self, parent=None, width=5, height=4, dpi=100):
+        fig = Figure(figsize=(width, height), dpi=dpi)
+        # Create three subplots stacked vertically.
+        self.axes = fig.subplots(3, 1)
+        super().__init__(fig)
 
-        self.setWindowTitle("My App")
 
-        # Changed to self.button to allow scope across whole instance i.e. in the methods too
-        self.button = QPushButton("Press Me!")
+class MainWindow(QtWidgets.QMainWindow):
 
-        # Signals - notifications emitted by widgets
-        # Slots - receiver of signals, can by any function or method
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
-        # Most widgets have their own signals like for QMainWindow
-        self.windowTitleChanged.connect(self.the_window_title_changed)
-
-        # clicked signal connected to slot called the_button_was_clicked
-        self.button.setCheckable(True)
-        self.button.clicked.connect(self.the_button_was_clicked)
-        # If widget signal doesn't provide signal that sends current state, 
-        # we need to get it directly from Widget as given in the method definition
-        # For example, released signal fires when button released but doesn't send check state
-        self.button.released.connect(self.the_button_was_released)
+        # Create the FigureCanvas object with single set of axes
         
-        # We can also send data to slots, checkstate in this case
-        self.button.clicked.connect(self.the_button_was_toggled)
+        self.canvas = MplCanvas(self, width=5, height=4, dpi=100)
+        self.setCentralWidget(self.canvas)
 
-        self.setCentralWidget(self.button)
+        # Create toolbar, passing canvas as first parameter, parent as second. 
+        # Passing in the canvas links toolbar to it allowing it to be controlled
+        toolbar = NavigationToolbar(self.canvas, self)
 
-    def the_button_was_clicked(self):
-        # Change state of widget
-        self.button.setText("You already clicked me.")
+        # QVBoxLayout arranges widgets vertically from top to bottom
+        layout = QtWidgets.QVBoxLayout()
+        layout.addWidget(toolbar)
+        layout.addWidget(self.canvas)
+
+        # Create a placeholder widget to hold both toolbar and canvas
+        widget = QtWidgets.QWidget()
+        widget.setLayout(layout)
+        self.setCentralWidget(widget)
+
+        n_data = 50
+        self.xdata = list(range(n_data))
+        self.ydata = [random.randint(0, 10) for i in range(n_data)]
+        # Create data sources for 3 plots
+        self.ydata1 = [random.randint(0, 10) for i in range(n_data)]
+        self.ydata2 = [random.randint(0, 10) for i in range(n_data)]
+        self.ydata3 = [random.randint(0, 10) for i in range(n_data)]
+        # We need to store a reference to the plotted line 
+        # somewhere so we can apply the new data to it
+        self._plot_ref1 = None
+        self._plot_ref2 = None
+        self._plot_ref3 = None
+        self.update_plot()
         
-        # To disable button call
-        # self.button.setEnabled(False)
+        self.show()
+
+        # timer triggers the redraw by calling update_plot
+
+        self.timer = QtCore.QTimer()
+
+        # Timeout interval in ms
+        self.timer.setInterval(0)
+
+        # timer.timeout() signal emitted when timer times out. Returns ID of timer 
+        # Here it connects to the update_plot slot and so it activates it each 
+        # time a timer times out
+        self.timer.timeout.connect(self.update_plot)
+        self.timer.start()
+
+    def update_plot(self):
+        # Drop off the first y element, append a new one.
+        self.ydata1 = self.ydata1[1:] + [random.randint(0, 10)]
+        self.ydata2 = self.ydata2[1:] + [random.randint(0, 10)]
+        self.ydata3 = self.ydata3[1:] + [random.randint(0, 10)]
+
+
+
+        # Note: we no longer need to clear the axis.
+        if self._plot_ref1 is None:
+            # First time we have no plot reference, so do a normal plot.
+            # .plot returns a list of line <reference>s, as we're
+            # only getting one we can take the first element.
+            plot_refs1 = self.canvas.axes[0].plot(self.xdata, self.ydata1, 'r')
+            self._plot_ref1 = plot_refs1[0]
+            self.canvas.axes[0].set_ylabel("Plot 1")
+
+            plot_refs2 = self.canvas.axes[1].plot(self.xdata, self.ydata2, 'g')
+            self._plot_ref2 = plot_refs2[0]
+            self.canvas.axes[1].set_ylabel("Plot 2")
+
+            plot_refs3 = self.canvas.axes[2].plot(self.xdata, self.ydata3, 'b')
+            self._plot_ref3 = plot_refs3[0]
+            self.canvas.axes[2].set_ylabel("Plot 3")
+            self.canvas.axes[2].set_xlabel("Data Points")
         
-        # self.setWindowTitle("My oneshot app")
+        else:
+            # We have a reference, we can use it to update the data for that line.
+            self._plot_ref1.set_ydata(self.ydata1)
+            self._plot_ref2.set_ydata(self.ydata2)
+            self._plot_ref3.set_ydata(self.ydata3)
+            
+        # Trigger the canvas to update and redraw.
+        self.canvas.draw()
 
 
-    def the_button_was_toggled(self, check): # Receives check input from the signal
-        # Storing state of widget in variables
-        self.button_is_checked = check
-        print(f"Checkstate from toggle: {self.button_is_checked}")
 
-        # Signals can be chained together
-        # One signal can trigger other signals 
-        new_window_title = choice(window_titles)
-        print("Setting title: %s" % new_window_title)
-        self.setWindowTitle(new_window_title)
 
-    def the_button_was_released(self):
-        self.button_is_checked = self.button.isChecked()
+app = QtWidgets.QApplication([])
 
-        print(f"Checkstate from release: {self.button_is_checked}")
-
-    def the_window_title_changed(self, window_title):
-        print("Window title changed: %s" %window_title)
-
-        # windowTitleChanged signal only emitted when window title changes
-        # If same title set multiple times, signal only fired first time
-
-        if window_title == "Something went wrong":
-            self.button.setDisabled(True)
-
-# An instance of QApplicaiton
-app = QApplication([])
-
-# An instance of QWidget with QWidget()
-# QMainWindow -> Pre-made widget, with lots of standard window features like toolbars, menus, dockable widgets, etc.
-# Top level widgets are windows, don't have a parent and not nested within another widget
-# We can create a window with any widget
 window = MainWindow()
 
-# Widgets without parent, invisible by default. So need to call .show()
-# Need at least one window, can have more
-# No way to exit currently. App will close when last window closed
-window.show()
 
 app.exec()
-
