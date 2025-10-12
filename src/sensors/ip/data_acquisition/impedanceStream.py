@@ -58,6 +58,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ydata1 = [random.randint(0, 10) for i in range(n_data)]
         self.ydata2 = [random.randint(0, 10) for i in range(n_data)]
         self.ydata3 = [random.randint(0, 10) for i in range(n_data)]
+
         # We need to store a reference to the plotted line 
         # somewhere so we can apply the new data to it
         self._plot_ref1 = None
