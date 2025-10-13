@@ -28,16 +28,20 @@ Install Arduino IDE and follow instructions on: <url>https://www.pjrc.com/teensy
 
 #### Modifications:
 
-<ul>
-<li> Remove EIT loops for drive and sensing electrodes to replace with single pair of drive electrodes and single pair of sensing electrodes. </li>
-<li> Change g_iSamples_per_cycle to 3, to correspond to an excitation frequency of 83kHz. This is the closest possible with integer samples per cycle to the frequency used by Physioflow Lab. </li>
-<li> Corrected the g_iTarget_period_us to correspond correctly to the conversion from seconds to microseconds.</li>
-<li> Changed the gain to ~3.95 instead of 1000 in original by setting - g_iInputGainResistor1_ohms and g_iInputGainResistor2_ohms to 50,000</li>
-<li> Shift switch off/on of the muxes to outside the loop to avoid constant switching off/on each iteration of the loop. This adds a square wave component to the output if not removed.
-</ul>
+-  Remove EIT loops for drive and sensing electrodes to replace with single pair of drive electrodes and single pair of sensing electrodes. 
+- Change g_iSamples_per_cycle to 3, to correspond to an excitation frequency of 83kHz. This is the closest possible with integer samples per cycle to the frequency used by Physioflow Lab.
+- Corrected the g_iTarget_period_us to correspond correctly to the conversion from seconds to microseconds.
+- Changed the gain to ~3.95 instead of 1000 in original by setting - g_iInputGainResistor1_ohms and g_iInputGainResistor2_ohms to 50,000
+- Shift switch off/on of the muxes to outside the loop to avoid constant switching off/on each iteration of the loop. This adds a square wave component to the output if not removed.
 
 #### Pending:
 
-<ul>
-<li> Modify tests.h to correspond to eit.h changes </li>
-</ul>
+- Modify tests.h to correspond to eit.h changes
+
+#### Recurring errors and resolution
+
+- raise SerialException(msg.errno, "could not open port {}: {}".format(self._port, msg))
+serial.serialutil.SerialException: [Errno 2] could not open port COM3: [Errno 2] No such file or directory: 'COM3'
+    - USB may not be connected.
+    - Port busy in another app
+    - When using WSL, ports are not accessible by default. Follow - https://learn.microsoft.com/en-us/windows/wsl/connect-usb
