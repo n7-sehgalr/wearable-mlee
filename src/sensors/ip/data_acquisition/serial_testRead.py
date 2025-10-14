@@ -1,7 +1,8 @@
 import serial
 import time
 
-ser = serial.Serial(port='COM3', baudrate=115200, timeout=1)
+# ser = serial.Serial(port='COM3', baudrate=115200, timeout=1)
+ser = serial.Serial(port='/dev/ttyACM0', baudrate=115200, timeout=1)
 
 
 start = time.time()

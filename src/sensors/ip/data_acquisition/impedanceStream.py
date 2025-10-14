@@ -6,7 +6,9 @@ from PyQt6 import QtCore, QtWidgets
 import serial
 import time
 
-SAMPLE_RATE = 1300 # approximately, from serial_readTest.py runs
+# ~1305, from serial_readTest.py runs on Windows laptop. 
+# 1424 for WSL on Desktop, ~2815 with timeout = 0 (might have empty values)
+SAMPLE_RATE = 1305 
 FPS = 30 # refresh rate of plot
 WINDOW_SIZE = 10 # seconds of data in one display
 
@@ -37,7 +39,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
         self.plot_graph.showGrid(x=True, y=True)
-        self.plot_graph.setYRange(20, 40)
+
+        # Fix X axis to 10 seconds, auto-scale Y axis
+        self.plot_graph.setXRange(0, WINDOW_SIZE)
+        self.plot_graph.getViewBox().enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
+        
         # Data
         self.time = list(range(10))
         self.temperature = [randint(20, 40) for _ in range(10)]
