@@ -2,7 +2,9 @@ name: phd
 channels:
   - defaults
 dependencies:
-  - python=3.10
-  - pandas
   - pyserial
+  - pandas
+  - python=3.10
   - pyqtgraph
+  - scipy
+  - matplotlib

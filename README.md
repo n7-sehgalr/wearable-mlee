@@ -37,6 +37,7 @@ Install Arduino IDE and follow instructions on: <url>https://www.pjrc.com/teensy
 #### Pending:
 
 - Modify tests.h to correspond to eit.h changes
+- Ignore rubbish samples only first iteration
 
 #### Recurring errors and resolution
 
