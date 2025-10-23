@@ -54,8 +54,8 @@ uint32_t g_iDrivingDist = 3; // Forced to sit between 1 and g_iElectrodes/2
 
 uint32_t const g_iInputGainResistor_min_ohms  = 0;
 uint32_t const g_iInputGainResistor_max_ohms  = 50000;
-uint32_t g_iInputGainResistor1_ohms           = 50000;
-uint32_t g_iInputGainResistor2_ohms           = 50000;
+uint32_t g_iInputGainResistor1_ohms           = 2313;
+uint32_t g_iInputGainResistor2_ohms           = 2313;
 
 uint32_t const g_iOutputGainResistor_min_ohms = 0;     // TODO : Replace with SAFE value
 uint32_t const g_iOutputGainResistor_max_ohms = 50000;
