@@ -9,3 +9,4 @@ src/sensors/ip/EIT-Device-Firmware/drivers/cmsis/RTOS
 
 src/sensors/ip/EIT-Device-Firmware/env.cmd
 *.csv
+notebooks/
