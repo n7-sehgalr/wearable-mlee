@@ -32,7 +32,7 @@ Install Arduino IDE and follow instructions on: <url>https://www.pjrc.com/teensy
 - Change g_iSamples_per_cycle to 3, to correspond to an excitation frequency of 83kHz. This is the closest possible with integer samples per cycle to the frequency used by Physioflow Lab.
 - Corrected the g_iTarget_period_us to correspond correctly to the conversion from seconds to microseconds.
 - Changed the gain to ~3.95 instead of 1000 in original by setting - g_iInputGainResistor1_ohms and g_iInputGainResistor2_ohms to 50,000
-- Shift switch off/on of the muxes to outside the loop to avoid constant switching off/on each iteration of the loop. This adds a square wave component to the output if not removed.
+- Shift switch off/on of the muxes to outside the loop to avoid constant switching off/on each iteration of the loop. This adds a square wave component to the output if not removed. The second channel requires reverting this. There is also a few microseconds delay that will exist between Channel 1 and Channel 2 readings from the modulation processing, settling time and asynchronous sampling from multiplexer switching.
 
 #### Pending:
 
