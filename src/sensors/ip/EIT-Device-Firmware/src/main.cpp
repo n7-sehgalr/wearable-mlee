@@ -31,6 +31,7 @@ char const logo[] = "\r\n\
 #include <fsl_pdb.h>
 #include <fsl_dac.h>
 
+
 #ifdef SEMIHOSTING
 #include <stdio.h>
 extern "C" void initialise_monitor_handles(void);
@@ -111,6 +112,14 @@ void setup()
     init_clocks();
     // init_systick();
     init_board();
+
+    // IMU initializatoin
+    if (bno.begin()) {
+      LOG("BNO055 detected\r\n");
+    } 
+    else {
+      LOG("Oops, no BNO055 detected\r\n");
+    }
 
     // Setup ADC with DMA
     init_edma();
