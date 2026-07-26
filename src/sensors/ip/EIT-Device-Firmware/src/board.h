@@ -7,6 +7,13 @@
 #include "AD5262.h"
 #include "AD9833.h"
 
+
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BNO055.h>
+
+
+
 #define PIN_INFO(_port, _pin) PORT ## _port , GPIO ## _port , _pin
 
 
@@ -198,6 +205,13 @@ gpio_pin_config_t const ADCFLG_Config = {kGPIO_DigitalOutput, 1};
 
 
 /*******************************************************************************
+ * Initalise IMU
+ ************
+ ******************************************************************/
+// Initialize the sensor on Wire2 (ID 55, address 0x28)
+Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28, &Wire2);
+
+/*******************************************************************************
  * Initalise board
  ******************************************************************************/
 
@@ -212,3 +226,4 @@ void init_board()
     TP_INIT(1);
     ADCFLG_INIT(1);
 }
+
