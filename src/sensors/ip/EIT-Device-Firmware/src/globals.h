@@ -128,6 +128,11 @@ uint32_t const g_iSamples_max        = g_iSamples_useful_max + g_iSample_rubbish
 volatile uint32_t g_aiSamples[g_iSamples_max];
 
 
+// EIT Data
+extern volatile float g_fImpedanceMagnitude1;
+extern volatile float g_fImpedanceMagnitude2;
+
+
 // IMU
 extern Adafruit_BNO055 bno;
 extern uint8_t system_cal, gyro_cal, accel_cal, mag_cal;

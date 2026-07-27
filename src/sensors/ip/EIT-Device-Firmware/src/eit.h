@@ -56,6 +56,71 @@ unsigned int transformElectrode(unsigned int electrode)
     return transformed;
 }
 
+
+// This function should be called as often as possible in the main loop.
+// It measures the two impedance channels and stores the results in global variables.
+void update_eit_readings()
+{
+    // --- Define Sensing Electrodes ---
+    unsigned int senseAElectrode1 = 2, senseBElectrode1 = 3; // Channel 1
+    unsigned int senseAElectrode2 = 4, senseBElectrode2 = 5; // Channel 2
+
+    // --- Measure Impedance Channel 1 ---
+    // Connect the selected sensing pair for the first channel
+    senseAMux.select((ADG732::Channel) transformElectrode(senseAElectrode1));
+    senseBMux.select((ADG732::Channel) transformElectrode(senseBElectrode1));
+
+    // Trigger and wait for ADC operation
+    adc_collect_samples(const_cast<uint32_t * >(g_aiSamples), g_iSamples);
+
+    // Calculate magnitude and store it in the global variable
+    g_fImpedanceMagnitude1 = eit_iq_demodulation ( 
+        const_cast<uint32_t const * >(&g_aiSamples[g_iSample_rubbish]), // Ignore "rubbish" samples.
+        g_iSamples_useful, 
+        g_iSamples_per_cycle);
+
+    // --- Measure Impedance Channel 2 ---
+    // Connect the selected sensing pair for the second channel
+    senseAMux.select((ADG732::Channel) transformElectrode(senseAElectrode2));
+    senseBMux.select((ADG732::Channel) transformElectrode(senseBElectrode2));
+    adc_collect_samples(const_cast<uint32_t * >(g_aiSamples), g_iSamples);
+    g_fImpedanceMagnitude2 = eit_iq_demodulation ( 
+        const_cast<uint32_t const * >(&g_aiSamples[g_iSample_rubbish]),
+        g_iSamples_useful, 
+        g_iSamples_per_cycle);
+}
+
+// This function is called at a fixed interval (e.g., 100Hz).
+// It reads the IMU, combines it with the latest EIT data, and sends the packet.
+void sample_and_send_data()
+{
+    // --- Capture high-resolution timestamp for the data packet ---
+    unsigned long currentTime = micros();
+
+    // --- Read IMU Data ---
+    // struct from Adafruit holding timestamp, sensor id, sensor type and measurement values
+    sensors_event_t event;
+    //reads primary data from current sensor data and save in sensors_event_t struct called event
+    // for BNO055, primary data is orientation, cannot get acceleration from here
+    bno.getEvent(&event); 
+    imu::Vector<3> linearAccel = bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
+
+    // --- Combine and Send Data as CSV ---
+    // The impedance values are the most recent ones calculated by update_eit_readings().
+    // Format: timestamp_us,impedance1,impedance2,orient_x,orient_y,orient_z,accel_x,accel_y,accel_z
+    Serial.print(currentTime); Serial.print(",");
+    Serial.print(g_fImpedanceMagnitude1, 4); Serial.print(",");
+    Serial.print(g_fImpedanceMagnitude2, 4); Serial.print(",");
+    Serial.print(event.orientation.x, 4); Serial.print(","); // Heading/Yaw
+    Serial.print(event.orientation.y, 4); Serial.print(","); // Roll
+    Serial.print(event.orientation.z, 4); Serial.print(","); // Pitch
+    Serial.print(linearAccel.x(), 4); Serial.print(",");
+    Serial.print(linearAccel.y(), 4); Serial.print(",");
+    Serial.print(linearAccel.z(), 4);
+    Serial.println();
+    Serial.flush(); // Flush to ensure data is sent immediately
+}
+
 void collect_eit_frame()
     {
         // This function is called repeatedly by the main loop in main.cpp.

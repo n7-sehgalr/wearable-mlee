@@ -48,6 +48,11 @@ extern "C" void initialise_monitor_handles(void);
 #include "eit.h"
 #include "tests.h"
 
+// Global variables for the most recent EIT readings.
+// 'volatile' is used because they are updated frequently in the main loop.
+volatile float g_fImpedanceMagnitude1 = 0.0f;
+volatile float g_fImpedanceMagnitude2 = 0.0f;
+
 // Create an instance of the BNO055 sensor object.
 // - The first parameter (55) is an arbitrary but unique sensor ID.
 // - The second (0x28) is the BNO055's default I2C address.
@@ -86,6 +91,9 @@ extern "C" int main()
     getAll("all");
     SDK_DelayAtLeastUs(g_iStartupDelay_ms * 1000, SystemCoreClock); // Give the user time (g_iStartupDelay_ms) to see the logo
 
+    // Timing variables for non-blocking data packet transmission
+    unsigned long previousPacketTime = 0;
+    const unsigned long packetInterval = 10000; // 10,000 microseconds = 10ms (100 Hz)
     
     // Main Loop
     for (;;)
@@ -94,21 +102,32 @@ extern "C" int main()
             yield(); // For Multitasking arduino libraries including usb serial
         #endif
 
-        // Execute current task (depending on the configured mode)
         BOARD_LED_ON();
-        if (g_bRun) { // Is there an active task
-            g_ModeFunctions[g_eMode](); // Run the desired task
-        }
-        
+        if (g_bRun) { 
+            // Special handling for the main EIT mode to enable cooperative multitasking.
+            if (g_eMode == Modes::EIT) {
+                // --------------------------------------------------
+                // 1. HIGH-FREQUENCY EIT BLOCK
+                // --------------------------------------------------
+                // This runs as fast as the loop allows, continuously updating impedance values.
+                update_eit_readings();
 
-        // Wait between task executions (g_iDelay_ms)
-        // SDK_DelayAtLeastUs(g_iDelay_ms * 1000, SystemCoreClock); // TODO: use the system tick counter to be hard real time
+                // --------------------------------------------------
+                // 2. TIMED DATA PACKET BLOCK
+                // --------------------------------------------------
+                unsigned long currentMicros = micros(); // Check the current time
+                if (currentMicros - previousPacketTime >= packetInterval) {
+                    previousPacketTime = currentMicros; // Reset the timer for the next interval
+                    sample_and_send_data(); // Read IMU and send the combined data packet.
+                }
+            } else {
+                g_ModeFunctions[g_eMode](); // Run other modes (like tests) in the old blocking way.
+            }
+        }
         
         // Check if we have recieved any commands via the serial port and act on them
         processCommands();
-
-        // Add a small delay to control the data rate to roughly 100Hz.
-        delay(10);
+        // The blocking delay(10) is removed to allow the loop to run freely.
     }
 
     BOARD_LED_OFF();
