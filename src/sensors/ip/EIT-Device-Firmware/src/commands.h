@@ -128,6 +128,7 @@ void possibleValues(bool get = true)
     LOG("samplesPerCycle, ");
     LOG("sampleRubbish, ");
     LOG("mapToLines, ");
+    LOG("imucal, ");
     LOG("\r\n");
 }
 
@@ -201,6 +202,24 @@ bool getAll(String const & match_to)
     return true;
 }
 
+bool getIMUCal(String const & match_to)
+{
+    if (match_to != "imucal") return false;
+
+    // Fetch the latest calibration status from the sensor.
+    bno.getCalibration(&system_cal, &gyro_cal, &accel_cal, &mag_cal);
+
+    // Send the status back to the computer for display.
+    SL(); LOG("IMU CALIBRATION: ");
+    LOG("Sys=");   LOG((uint16_t)system_cal);
+    LOG(" Gyro=");  LOG((uint16_t)gyro_cal);
+    LOG(" Accel="); LOG((uint16_t)accel_cal);
+    LOG(" Mag=");   LOG((uint16_t)mag_cal);
+    LOG("\r\n");
+
+    return true;
+}
+
        
 
 bool getConfigCommand(String const & command, String const & arguments) 
@@ -210,6 +229,7 @@ bool getConfigCommand(String const & command, String const & arguments)
     if(arguments.length() == 0 ) return getUsage();
 
     return getAll(arguments)
+    || getIMUCal(arguments)
     || getDirectE<Modes>("mode"      , "mode"              , arguments, g_eMode                   )
     || getDirectE<DACModes>("dacMode", "dacmode"           , arguments, g_eDACMode                )
 

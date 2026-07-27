@@ -1,3 +1,9 @@
+// Add the necessary libraries for I2C communication and the BNO055 sensor.
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BNO055.h>
+#include <utility/imumaths.h>
+
 #define lenof(array) ( sizeof(array) / sizeof(array[0]) )
 
 // Non User Configurable Constants
@@ -120,6 +126,11 @@ void recalculateGlobals()
 uint32_t const g_iSamples_useful_max = g_iSamples_per_cycle_max * g_iSample_cycles_max;
 uint32_t const g_iSamples_max        = g_iSamples_useful_max + g_iSample_rubbish_max;
 volatile uint32_t g_aiSamples[g_iSamples_max];
+
+
+// IMU
+extern Adafruit_BNO055 bno;
+extern uint8_t system_cal, gyro_cal, accel_cal, mag_cal;
 
 
 // System 

@@ -31,6 +31,7 @@ char const logo[] = "\r\n\
 #include <fsl_pdb.h>
 #include <fsl_dac.h>
 
+
 #ifdef SEMIHOSTING
 #include <stdio.h>
 extern "C" void initialise_monitor_handles(void);
@@ -46,6 +47,15 @@ extern "C" void initialise_monitor_handles(void);
 #include "setup.h"
 #include "eit.h"
 #include "tests.h"
+
+// Create an instance of the BNO055 sensor object.
+// - The first parameter (55) is an arbitrary but unique sensor ID.
+// - The second (0x28) is the BNO055's default I2C address.
+// - The third parameter (&Wire2) tells the library to use the Teensy's second I2C bus (SDA=4, SCL=3).
+Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28, &Wire2);
+
+// A place to store the IMU calibration status.
+uint8_t system_cal = 0, gyro_cal = 0, accel_cal = 0, mag_cal = 0;
 
 void recalulatePeripherals();
 
@@ -96,6 +106,9 @@ extern "C" int main()
         
         // Check if we have recieved any commands via the serial port and act on them
         processCommands();
+
+        // Add a small delay to control the data rate to roughly 100Hz.
+        delay(10);
     }
 
     BOARD_LED_OFF();
@@ -112,6 +125,21 @@ void setup()
     // init_systick();
     init_board();
 
+    // --- New BNO055 Initialization ---
+    LOG("Attempting to initialize BNO055...\r\n");
+    /* Initialise the BNO055 sensor. This will also start Wire2. */
+    if(!bno.begin())
+    {
+      /* If this fails, there's a problem detecting the BNO055. Check your wiring and I2C address. */
+      LOG("Oops, no BNO055 detected ... Check your wiring or I2C ADDR!\r\n");
+    }
+    else {
+        LOG("BNO055 detected successfully!\r\n");
+        delay(1000); // Wait for sensor to stabilize
+        bno.setExtCrystalUse(true); // Use external crystal for better stability
+        bno.getCalibration(&system_cal, &gyro_cal, &accel_cal, &mag_cal); // Get initial calibration
+    }
+
     // Setup ADC with DMA
     init_edma();
     init_dmamux();
@@ -126,6 +154,17 @@ void setup()
     driveGroundMux.init();
     senseAMux.init();
     senseBMux.init();
+
+    // Enable Muxes once to avoid switching them on/off inside the loop
+    driveSourceMux.enable(true);
+    driveGroundMux.enable(true);
+    senseAMux.enable(true);
+    senseBMux.enable(true);
+
+    // Set the driving electrodes once, as they are fixed for this application
+    unsigned int drivingElectrode = 0, groundElectrode = 1; // Physical pins 1, 3
+    driveSourceMux.select((ADG732::Channel) transformElectrode(drivingElectrode)); // Setup the drive current "+/source" multiplexer
+    driveGroundMux.select((ADG732::Channel) transformElectrode(groundElectrode )); // Setup the drive current "-/ground" multiplexer
 
     // Initalise the digipots
     inputAmpGainResistor.init();
