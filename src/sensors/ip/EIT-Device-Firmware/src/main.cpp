@@ -110,7 +110,7 @@ extern "C" int main()
                 // 1. HIGH-FREQUENCY EIT BLOCK
                 // --------------------------------------------------
                 // This runs as fast as the loop allows, continuously updating impedance values.
-                update_eit_readings();
+                collect_eit_frame();
 
                 // --------------------------------------------------
                 // 2. TIMED DATA PACKET BLOCK
