@@ -128,6 +128,9 @@ add_subdirectory(./drivers/generic)
 add_subdirectory(./drivers/cmsis)
 add_subdirectory(./drivers/boards/)
 add_subdirectory(./drivers/external/)
+add_subdirectory(./drivers/Adafruit_BNO055-1.6.4)
+add_subdirectory(./drivers/Adafruit_Unified_Sensor-1.1.15)
+
 
 include_directories(
     ./src
@@ -146,6 +149,7 @@ target_link_libraries(${PROJECT_NAME}
     $<$<NOT:$<BOOL:${USE_ARDUINO}>>:MK66F18_default_handlers>
     $<$<NOT:$<BOOL:${USE_ARDUINO}>>:Generic_stdlib_stubs>
     ${drivers}
+    Adafruit_BNO055
 )
 
 
