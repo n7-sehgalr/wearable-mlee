@@ -21,6 +21,11 @@ char const logo[] = "\r\n\
               
 
 #include "Arduino.h"
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BNO055.h>
+#include <utility/imumaths.h>
+
 #include <fsl_clock.h>
 #include <fsl_gpio.h>
 #include <fsl_port.h>
