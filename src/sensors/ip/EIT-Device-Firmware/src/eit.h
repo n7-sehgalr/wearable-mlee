@@ -73,11 +73,8 @@ void sample_and_send_data()
     imu::Vector<3> linearAccel = bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
 
     // --- Combine and Send Data as CSV ---
-    // The impedance values are the most recent ones calculated by update_eit_readings().
-    // Format: timestamp_us,impedance1,impedance2,orient_x,orient_y,orient_z,accel_x,accel_y,accel_z
+    // Format: timestamp_us,orient_x,orient_y,orient_z,accel_x,accel_y,accel_z
     Serial.print(currentTime); Serial.print(",");
-    Serial.print(g_fImpedanceMagnitude1, 4); Serial.print(",");
-    Serial.print(g_fImpedanceMagnitude2, 4); Serial.print(",");
     Serial.print(event.orientation.x, 4); Serial.print(","); // Heading/Yaw
     Serial.print(event.orientation.y, 4); Serial.print(","); // Roll
     Serial.print(event.orientation.z, 4); Serial.print(","); // Pitch
@@ -120,4 +117,12 @@ void collect_eit_frame()
             const_cast<uint32_t const * >(&g_aiSamples[g_iSample_rubbish]),
             g_iSamples_useful, 
             g_iSamples_per_cycle);
+
+        // --- Stream EIT Data Immediately ---
+        unsigned long currentTime = micros();
+        Serial.print(currentTime); Serial.print(",");
+        Serial.print(g_fImpedanceMagnitude1, 4); Serial.print(",");
+        Serial.print(g_fImpedanceMagnitude2, 4);
+        Serial.println();
+        Serial.flush();
     }
