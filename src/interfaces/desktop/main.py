@@ -2,6 +2,7 @@ import sys
 import os
 import time
 import datetime
+import collections
 import numpy as np
 import pandas as pd
 import serial
@@ -10,11 +11,10 @@ import serial.tools.list_ports
 # Suppress Qt DPI warning on Windows
 os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
 
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QHBoxLayout, QLabel, QLineEdit, QPushButton, 
-                             QComboBox, QMessageBox, QGroupBox, QGridLayout,
-                             QStatusBar)
-from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                             QHBoxLayout, QLabel, QLineEdit, QPushButton,
+                             QComboBox, QMessageBox, QGroupBox, QGridLayout)
+from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer, QMutex, QMutexLocker
 from PyQt6.QtGui import QFont
 import pyqtgraph as pg
 
@@ -24,9 +24,16 @@ except ImportError:
     pass  # PyAutoGUI is optional
 
 
+# ======================================================================
+# Serial Worker — runs in its own thread, pushes lines into a queue
+# ======================================================================
 class SerialWorker(QThread):
-    """Background thread that reads lines from the serial port."""
-    data_received = pyqtSignal(str)
+    """Background thread that reads lines from the serial port.
+
+    Lines are accumulated in a thread-safe deque.  The GUI reads
+    from the deque on a timer — this decouples serial I/O from
+    rendering so the GUI never freezes.
+    """
     error_occurred = pyqtSignal(str)
     connection_lost = pyqtSignal()
 
@@ -36,11 +43,21 @@ class SerialWorker(QThread):
         self.baudrate = baudrate
         self.serial_conn = None
         self.is_running = False
+        # Thread-safe line buffer (main thread drains it on a timer)
+        self._lock = QMutex()
+        self._line_queue = collections.deque(maxlen=5000)
+
+    def drain_lines(self):
+        """Called from the GUI thread to grab all queued lines at once."""
+        with QMutexLocker(self._lock):
+            lines = list(self._line_queue)
+            self._line_queue.clear()
+        return lines
 
     def run(self):
         try:
             self.serial_conn = serial.Serial(
-                self.port, self.baudrate, timeout=0.1
+                self.port, self.baudrate, timeout=0.05
             )
             self.is_running = True
             while self.is_running:
@@ -52,9 +69,10 @@ class SerialWorker(QThread):
                         except Exception:
                             continue
                         if line:
-                            self.data_received.emit(line)
+                            with QMutexLocker(self._lock):
+                                self._line_queue.append(line)
                     else:
-                        self.msleep(1)  # Prevent busy-spin when no data
+                        self.msleep(1)
                 except serial.SerialException:
                     self.connection_lost.emit()
                     break
@@ -77,6 +95,9 @@ class SerialWorker(QThread):
         self.wait(2000)
 
 
+# ======================================================================
+# Plot Widget — only stores data; redraws are triggered externally
+# ======================================================================
 class DataPlotter(pg.PlotWidget):
     """Real-time scrolling plot with optional moving-average smoothing."""
 
@@ -88,43 +109,58 @@ class DataPlotter(pg.PlotWidget):
         self.setLabel('bottom', 'Time', units='s')
         self.max_points = max_points
         self.curves = []
+        self.enableAutoRange(axis='y')
 
         if labels is None:
             labels = ["Data"]
         if colors is None:
             colors = [(255, 0, 0)]
 
+        self.labels = labels
         self.data_buffers = {label: np.zeros(max_points) for label in labels}
         self.time_buffer = np.zeros(max_points)
-        self.ptr = 0
+        self.ptr = 0  # total samples received (clamped to max_points)
+        self._dirty = False  # whether new data arrived since last redraw
 
         for i, label in enumerate(labels):
             color = colors[i % len(colors)]
             curve = self.plot(pen=pg.mkPen(color=color, width=2), name=label)
             self.curves.append((label, curve))
 
-    def update_data(self, t, values, smooth_window=5):
-        """Shift buffers left, append new sample, redraw."""
+    def append_sample(self, t, values):
+        """Append one sample to the ring buffer (cheap, no redraw)."""
         self.time_buffer[:-1] = self.time_buffer[1:]
         self.time_buffer[-1] = t
 
-        for i, (label, curve) in enumerate(self.curves):
+        for i, (label, _curve) in enumerate(self.curves):
             self.data_buffers[label][:-1] = self.data_buffers[label][1:]
             self.data_buffers[label][-1] = values[i]
 
-            if self.ptr >= smooth_window:
-                kernel = np.ones(smooth_window) / smooth_window
-                smoothed = np.convolve(
-                    self.data_buffers[label], kernel, mode='same'
-                )
-                curve.setData(self.time_buffer, smoothed)
-            else:
-                curve.setData(self.time_buffer, self.data_buffers[label])
-
         if self.ptr < self.max_points:
             self.ptr += 1
+        self._dirty = True
+
+    def redraw(self, smooth_window=5):
+        """Redraw curves from ring buffer.  Called from the GUI timer."""
+        if not self._dirty:
+            return
+        self._dirty = False
+
+        # Only show the portion of the buffer that has real data
+        start = max(0, self.max_points - self.ptr)
+        t_slice = self.time_buffer[start:]
+
+        for label, curve in self.curves:
+            y = self.data_buffers[label][start:]
+            if len(y) >= smooth_window:
+                kernel = np.ones(smooth_window) / smooth_window
+                y = np.convolve(y, kernel, mode='same')
+            curve.setData(t_slice, y)
 
 
+# ======================================================================
+# Main Window
+# ======================================================================
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -136,10 +172,11 @@ class MainWindow(QMainWindow):
         self.is_recording = False
         self.serial_worker = None
         self.base_dir = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "..", "..", "data", "01_raw")
+            os.path.join(os.path.dirname(__file__),
+                         "..", "..", "..", "data", "01_raw")
         )
 
-        # Counters for status display
+        # Counters
         self.eit_packet_count = 0
         self.imu_packet_count = 0
         self.skipped_line_count = 0
@@ -152,11 +189,12 @@ class MainWindow(QMainWindow):
 
         self.init_ui()
 
-        # Periodic status update timer (every 500 ms)
-        self.status_timer = QTimer(self)
-        self.status_timer.timeout.connect(self.update_status_counts)
-        self.status_timer.start(500)
+        # ----- Render timer (30 fps) — redraws all four plots -----
+        self.render_timer = QTimer(self)
+        self.render_timer.timeout.connect(self._render_tick)
+        self.render_timer.start(33)  # ~30 fps
 
+    # ------------------------------------------------------------------
     def init_ui(self):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -167,7 +205,8 @@ class MainWindow(QMainWindow):
         control_layout = QGridLayout()
 
         self.part_input = QLineEdit("P01")
-        self.date_input = QLineEdit(datetime.datetime.now().strftime("%Y%m%d"))
+        self.date_input = QLineEdit(
+            datetime.datetime.now().strftime("%Y%m%d"))
         self.visit_input = QLineEdit("V1")
 
         control_layout.addWidget(QLabel("Participant ID:"), 0, 0)
@@ -211,7 +250,8 @@ class MainWindow(QMainWindow):
         self.lbl_skipped = QLabel("Skipped: 0")
         self.lbl_last_line = QLabel("Last line: (none)")
         self.lbl_last_line.setMaximumWidth(600)
-        for lbl in (self.lbl_eit_count, self.lbl_imu_count, self.lbl_skipped):
+        for lbl in (self.lbl_eit_count, self.lbl_imu_count,
+                     self.lbl_skipped):
             lbl.setFont(QFont("Consolas", 9))
             status_row.addWidget(lbl)
         self.lbl_last_line.setFont(QFont("Consolas", 8))
@@ -224,22 +264,18 @@ class MainWindow(QMainWindow):
 
         self.plot_eit1 = DataPlotter(
             "EIT Channel 1 Magnitude",
-            labels=["Mag 1"], colors=[(0, 255, 255)]
-        )
+            labels=["Mag 1"], colors=[(0, 255, 255)])
         self.plot_eit2 = DataPlotter(
             "EIT Channel 2 Magnitude",
-            labels=["Mag 2"], colors=[(255, 0, 255)]
-        )
+            labels=["Mag 2"], colors=[(255, 0, 255)])
         self.plot_imu_accel = DataPlotter(
             "IMU Linear Acceleration",
             labels=["Ax", "Ay", "Az"],
-            colors=[(255, 80, 80), (80, 255, 80), (80, 120, 255)]
-        )
+            colors=[(255, 80, 80), (80, 255, 80), (80, 120, 255)])
         self.plot_imu_orient = DataPlotter(
             "IMU Orientation",
             labels=["Yaw", "Roll", "Pitch"],
-            colors=[(255, 180, 0), (0, 220, 220), (220, 0, 220)]
-        )
+            colors=[(255, 180, 0), (0, 220, 220), (220, 0, 220)])
 
         plots_layout.addWidget(self.plot_eit1, 0, 0)
         plots_layout.addWidget(self.plot_eit2, 1, 0)
@@ -248,20 +284,125 @@ class MainWindow(QMainWindow):
 
         main_layout.addLayout(plots_layout)
 
-        # Status Bar
-        self.statusBar().showMessage("Ready  —  Close Arduino IDE Serial Monitor before connecting")
+        self.statusBar().showMessage(
+            "Ready — Close Arduino IDE Serial Monitor before connecting")
 
-    def update_status_counts(self):
-        """Periodically refresh the packet-count labels."""
+    # ------------------------------------------------------------------
+    # Render tick — called at 30 fps
+    # ------------------------------------------------------------------
+    def _render_tick(self):
+        """Drain the serial queue, parse every line, then redraw plots once."""
+        if self.serial_worker is None or not self.serial_worker.is_running:
+            return
+
+        lines = self.serial_worker.drain_lines()
+        for line in lines:
+            self._parse_line(line)
+
+        # Single batch-redraw of all four plots
+        self.plot_eit1.redraw()
+        self.plot_eit2.redraw()
+        self.plot_imu_accel.redraw()
+        self.plot_imu_orient.redraw()
+
+        # Update status labels
         self.lbl_eit_count.setText(f"EIT: {self.eit_packet_count} pkts")
         self.lbl_imu_count.setText(f"IMU: {self.imu_packet_count} pkts")
         self.lbl_skipped.setText(f"Skipped: {self.skipped_line_count}")
 
+    # ------------------------------------------------------------------
+    def _parse_line(self, line):
+        """Parse one serial line into EIT or IMU data."""
+        # Debug display (last line)
+        display = line if len(line) <= 80 else line[:77] + "..."
+        self.lbl_last_line.setText(f"Last: {display}")
+
+        # Skip firmware comment / status lines
+        if not line or line[0] == '#' or line[0] == '\r':
+            self.skipped_line_count += 1
+            return
+
+        parts = line.split(',')
+        nfields = len(parts)
+
+        # ---- EIT packet (3 columns) ----
+        if nfields == 3:
+            try:
+                ts = float(parts[0])
+                mag1 = float(parts[1])
+                mag2 = float(parts[2])
+            except ValueError:
+                self.skipped_line_count += 1
+                return
+
+            self.eit_packet_count += 1
+            self.last_hardware_timestamp = parts[0].strip()
+            t = ts / 1_000_000.0
+            self.plot_eit1.append_sample(t, [mag1])
+            self.plot_eit2.append_sample(t, [mag2])
+
+            if self.is_recording:
+                self.eit_data.append([p.strip() for p in parts])
+
+        # ---- IMU packet (7 columns) ----
+        elif nfields == 7:
+            try:
+                ts = float(parts[0])
+                vals = [float(p) for p in parts[1:]]
+            except ValueError:
+                self.skipped_line_count += 1
+                return
+
+            self.imu_packet_count += 1
+            self.last_hardware_timestamp = parts[0].strip()
+            t = ts / 1_000_000.0
+            # vals = [rx, ry, rz, ax, ay, az]
+            self.plot_imu_orient.append_sample(t, vals[0:3])
+            self.plot_imu_accel.append_sample(t, vals[3:6])
+
+            if self.is_recording:
+                self.imu_data.append([p.strip() for p in parts])
+
+        # ---- Old combined format (9 columns: ts,m1,m2,rx,ry,rz,ax,ay,az) ----
+        elif nfields == 9:
+            try:
+                ts = float(parts[0])
+                mag1 = float(parts[1])
+                mag2 = float(parts[2])
+                vals = [float(p) for p in parts[3:]]
+            except ValueError:
+                self.skipped_line_count += 1
+                return
+
+            # Treat as both EIT + IMU
+            self.eit_packet_count += 1
+            self.imu_packet_count += 1
+            self.last_hardware_timestamp = parts[0].strip()
+            t = ts / 1_000_000.0
+            self.plot_eit1.append_sample(t, [mag1])
+            self.plot_eit2.append_sample(t, [mag2])
+            self.plot_imu_orient.append_sample(t, vals[0:3])
+            self.plot_imu_accel.append_sample(t, vals[3:6])
+
+            if self.is_recording:
+                self.eit_data.append([
+                    parts[0].strip(), parts[1].strip(), parts[2].strip()
+                ])
+                self.imu_data.append([
+                    parts[0].strip()] + [p.strip() for p in parts[3:]])
+
+        else:
+            self.skipped_line_count += 1
+
+    # ------------------------------------------------------------------
+    # Connection management
+    # ------------------------------------------------------------------
     def refresh_ports(self):
         self.port_combo.clear()
         ports = serial.tools.list_ports.comports()
         for p in ports:
-            self.port_combo.addItem(f"{p.device}  ({p.description})", p.device)
+            self.port_combo.addItem(
+                f"{p.device}  ({p.description})", p.device)
 
     def toggle_connection(self):
         if self.serial_worker is None or not self.serial_worker.is_running:
@@ -271,15 +412,15 @@ class MainWindow(QMainWindow):
                 return
             port = self.port_combo.itemData(idx)
 
-            # Reset counters
             self.eit_packet_count = 0
             self.imu_packet_count = 0
             self.skipped_line_count = 0
 
             self.serial_worker = SerialWorker(port)
-            self.serial_worker.data_received.connect(self.handle_serial_data)
-            self.serial_worker.error_occurred.connect(self.handle_serial_error)
-            self.serial_worker.connection_lost.connect(self.handle_connection_lost)
+            self.serial_worker.error_occurred.connect(
+                self.handle_serial_error)
+            self.serial_worker.connection_lost.connect(
+                self.handle_connection_lost)
             self.serial_worker.start()
 
             self.btn_connect.setText("Disconnect")
@@ -304,79 +445,6 @@ class MainWindow(QMainWindow):
             self.btn_record.setText("Record")
             self.statusBar().showMessage("Paused")
         self.setFocus()
-
-    # ------------------------------------------------------------------
-    # Serial data parsing
-    # ------------------------------------------------------------------
-    def handle_serial_data(self, line):
-        """Parse an incoming serial line.
-        
-        We differentiate packets purely by the number of comma-separated
-        numeric fields:
-          EIT  → 3 fields: timestamp_us, mag1, mag2
-          IMU  → 7 fields: timestamp_us, rx, ry, rz, ax, ay, az
-        
-        Lines that start with '#' are firmware status messages and are
-        silently skipped.  Any other non-numeric line is counted as
-        'skipped' so the user can see if the firmware format is wrong.
-        """
-        # Update debug display
-        display = line if len(line) <= 80 else line[:77] + "..."
-        self.lbl_last_line.setText(f"Last: {display}")
-
-        # Skip firmware comment / status lines
-        if line.startswith('#') or line.startswith('\r'):
-            self.skipped_line_count += 1
-            return
-
-        parts = line.split(',')
-
-        # ---- EIT packet (3 columns) ----
-        if len(parts) == 3:
-            try:
-                ts = float(parts[0])
-                mag1 = float(parts[1])
-                mag2 = float(parts[2])
-            except ValueError:
-                self.skipped_line_count += 1
-                return
-
-            self.eit_packet_count += 1
-            self.last_hardware_timestamp = parts[0].strip()
-            t = ts / 1_000_000.0
-            self.plot_eit1.update_data(t, [mag1])
-            self.plot_eit2.update_data(t, [mag2])
-
-            if self.is_recording:
-                self.eit_data.append([
-                    parts[0].strip(), parts[1].strip(), parts[2].strip()
-                ])
-
-        # ---- IMU packet (7 columns) ----
-        elif len(parts) == 7:
-            try:
-                ts = float(parts[0])
-                rx = float(parts[1])
-                ry = float(parts[2])
-                rz = float(parts[3])
-                ax = float(parts[4])
-                ay = float(parts[5])
-                az = float(parts[6])
-            except ValueError:
-                self.skipped_line_count += 1
-                return
-
-            self.imu_packet_count += 1
-            self.last_hardware_timestamp = parts[0].strip()
-            t = ts / 1_000_000.0
-            self.plot_imu_orient.update_data(t, [rx, ry, rz])
-            self.plot_imu_accel.update_data(t, [ax, ay, az])
-
-            if self.is_recording:
-                self.imu_data.append([p.strip() for p in parts])
-
-        else:
-            self.skipped_line_count += 1
 
     def handle_serial_error(self, err):
         QMessageBox.critical(self, "Serial Error", err)
@@ -406,7 +474,6 @@ class MainWindow(QMainWindow):
             's': 'Session Start',
             'o': 'Other',
         }
-
         if key in valid_keys and self.is_recording:
             timestamp = time.time()
             event_name = valid_keys[key]
@@ -414,11 +481,6 @@ class MainWindow(QMainWindow):
                 timestamp, self.last_hardware_timestamp, key, event_name
             ])
             self.statusBar().showMessage(f"✓ Marker: {event_name}")
-
-            # Optional: Mirror keypress to OT Biolab
-            # if 'pyautogui' in sys.modules:
-            #     pyautogui.press(key)
-
         super().keyPressEvent(event)
 
     # ------------------------------------------------------------------
@@ -434,8 +496,8 @@ class MainWindow(QMainWindow):
 
         if not participant or not date_str or not visit:
             QMessageBox.warning(
-                self, "Error", "Please fill in Participant, Date, and Visit."
-            )
+                self, "Error",
+                "Please fill in Participant, Date, and Visit.")
             return
 
         prefix = f"{participant}_{date_str}_{visit}"
@@ -446,8 +508,7 @@ class MainWindow(QMainWindow):
 
         if self.eit_data:
             df = pd.DataFrame(
-                self.eit_data, columns=['timestamp_us', 'mag1', 'mag2']
-            )
+                self.eit_data, columns=['timestamp_us', 'mag1', 'mag2'])
             path = os.path.join(target_dir, f"{prefix}_EIT.csv")
             df.to_csv(path, index=False)
             saved.append(f"EIT ({len(self.eit_data)} rows)")
@@ -455,11 +516,8 @@ class MainWindow(QMainWindow):
         if self.imu_data:
             df = pd.DataFrame(
                 self.imu_data,
-                columns=[
-                    'timestamp_us', 'rx_yaw', 'ry_roll', 'rz_pitch',
-                    'ax', 'ay', 'az',
-                ],
-            )
+                columns=['timestamp_us', 'rx_yaw', 'ry_roll', 'rz_pitch',
+                         'ax', 'ay', 'az'])
             path = os.path.join(target_dir, f"{prefix}_IMU.csv")
             df.to_csv(path, index=False)
             saved.append(f"IMU ({len(self.imu_data)} rows)")
@@ -467,10 +525,8 @@ class MainWindow(QMainWindow):
         if self.markers:
             df = pd.DataFrame(
                 self.markers,
-                columns=[
-                    'sys_timestamp', 'hardware_timestamp_us', 'key', 'event'
-                ],
-            )
+                columns=['sys_timestamp', 'hardware_timestamp_us',
+                         'key', 'event'])
             path = os.path.join(target_dir, f"{prefix}_markers.csv")
             df.to_csv(path, index=False)
             saved.append(f"Markers ({len(self.markers)} rows)")
@@ -478,10 +534,10 @@ class MainWindow(QMainWindow):
         if saved:
             QMessageBox.information(
                 self, "Success",
-                f"Saved to:\n{target_dir}\n\n" + "\n".join(saved)
-            )
+                f"Saved to:\n{target_dir}\n\n" + "\n".join(saved))
         else:
-            QMessageBox.warning(self, "Nothing to save", "No data was recorded.")
+            QMessageBox.warning(
+                self, "Nothing to save", "No data was recorded.")
 
         self.eit_data.clear()
         self.imu_data.clear()
@@ -489,18 +545,15 @@ class MainWindow(QMainWindow):
         self.btn_save.setEnabled(False)
 
     def closeEvent(self, event):
-        """Clean up serial thread on window close."""
         if self.serial_worker and self.serial_worker.is_running:
             self.serial_worker.stop()
         event.accept()
 
 
+# ======================================================================
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-
-    # Dark theme for pyqtgraph
     pg.setConfigOptions(antialias=True)
-
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
