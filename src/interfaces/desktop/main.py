@@ -13,7 +13,7 @@ os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QLineEdit, QPushButton,
-                             QComboBox, QMessageBox, QGroupBox, QGridLayout)
+                             QComboBox, QMessageBox, QGroupBox, QGridLayout, QDialog)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer, QMutex, QMutexLocker
 from PyQt6.QtGui import QFont
 import pyqtgraph as pg
@@ -110,6 +110,8 @@ class DataPlotter(pg.PlotWidget):
         self.max_points = max_points
         self.curves = []
         self.enableAutoRange(axis='y')
+        self.enableAutoRange(axis='x', enable=False)
+        self.setXRange(0, max_points, padding=0)
 
         if labels is None:
             labels = ["Data"]
@@ -118,7 +120,6 @@ class DataPlotter(pg.PlotWidget):
 
         self.labels = labels
         self.data_buffers = {label: np.zeros(max_points) for label in labels}
-        self.time_buffer = np.zeros(max_points)
         self.ptr = 0  # total samples received (clamped to max_points)
         self._dirty = False  # whether new data arrived since last redraw
 
@@ -129,9 +130,6 @@ class DataPlotter(pg.PlotWidget):
 
     def append_sample(self, t, values):
         """Append one sample to the ring buffer (cheap, no redraw)."""
-        self.time_buffer[:-1] = self.time_buffer[1:]
-        self.time_buffer[-1] = t
-
         for i, (label, _curve) in enumerate(self.curves):
             self.data_buffers[label][:-1] = self.data_buffers[label][1:]
             self.data_buffers[label][-1] = values[i]
@@ -140,7 +138,7 @@ class DataPlotter(pg.PlotWidget):
             self.ptr += 1
         self._dirty = True
 
-    def redraw(self, smooth_window=5):
+    def redraw(self):
         """Redraw curves from ring buffer.  Called from the GUI timer."""
         if not self._dirty:
             return
@@ -148,14 +146,53 @@ class DataPlotter(pg.PlotWidget):
 
         # Only show the portion of the buffer that has real data
         start = max(0, self.max_points - self.ptr)
-        t_slice = self.time_buffer[start:]
 
         for label, curve in self.curves:
             y = self.data_buffers[label][start:]
-            if len(y) >= smooth_window:
-                kernel = np.ones(smooth_window) / smooth_window
-                y = np.convolve(y, kernel, mode='same')
-            curve.setData(t_slice, y)
+            # Plot against static X axis (indices) to eliminate pyqtgraph autoscaling jitter
+            curve.setData(y)
+
+
+# ======================================================================
+# Calibration Dialog
+# ======================================================================
+class CalibrationDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("IMU Calibration")
+        self.resize(350, 200)
+        layout = QVBoxLayout(self)
+        
+        self.lbl_info = QLabel(
+            "<b>IMU Calibration Required</b><br><br>"
+            "1. <b>Gyroscope:</b> Leave the device resting completely still on a flat surface.<br>"
+            "2. <b>Magnetometer:</b> Move the device in a figure-8 motion."
+        )
+        self.lbl_info.setWordWrap(True)
+        layout.addWidget(self.lbl_info)
+        
+        self.lbl_sys = QLabel("System: 0/3")
+        self.lbl_gyro = QLabel("Gyroscope: 0/3")
+        self.lbl_accel = QLabel("Accelerometer: 0/3")
+        self.lbl_mag = QLabel("Magnetometer: 0/3")
+        
+        layout.addWidget(self.lbl_sys)
+        layout.addWidget(self.lbl_gyro)
+        layout.addWidget(self.lbl_accel)
+        layout.addWidget(self.lbl_mag)
+        
+        self.btn_start = QPushButton("Start Session (Bypass)")
+        self.btn_start.clicked.connect(self.accept)
+        layout.addWidget(self.btn_start)
+        
+    def update_calib(self, sys_cal, gyro, accel, mag):
+        self.lbl_sys.setText(f"System: {sys_cal}/3")
+        self.lbl_gyro.setText(f"Gyroscope: {gyro}/3")
+        self.lbl_accel.setText(f"Accelerometer: {accel}/3")
+        self.lbl_mag.setText(f"Magnetometer: {mag}/3")
+        if sys_cal == 3 and gyro == 3 and accel == 3 and mag == 3:
+            self.btn_start.setText("Start Session (Fully Calibrated)")
+            self.btn_start.setStyleSheet("background-color: green; color: white;")
 
 
 # ======================================================================
@@ -186,6 +223,9 @@ class MainWindow(QMainWindow):
         self.imu_data = []
         self.markers = []
         self.last_hardware_timestamp = "0"
+        self.latest_display_text = ""
+        self.calib_dialog = None
+        self.last_yaw = None
 
         self.init_ui()
 
@@ -248,10 +288,11 @@ class MainWindow(QMainWindow):
         self.lbl_eit_count = QLabel("EIT: 0 pkts")
         self.lbl_imu_count = QLabel("IMU: 0 pkts")
         self.lbl_skipped = QLabel("Skipped: 0")
+        self.lbl_calib_status = QLabel("Calib[Sys:0 G:0 A:0 M:0]")
         self.lbl_last_line = QLabel("Last line: (none)")
         self.lbl_last_line.setMaximumWidth(600)
         for lbl in (self.lbl_eit_count, self.lbl_imu_count,
-                     self.lbl_skipped):
+                     self.lbl_skipped, self.lbl_calib_status):
             lbl.setFont(QFont("Consolas", 9))
             status_row.addWidget(lbl)
         self.lbl_last_line.setFont(QFont("Consolas", 8))
@@ -268,14 +309,19 @@ class MainWindow(QMainWindow):
         self.plot_eit2 = DataPlotter(
             "EIT Channel 2 Magnitude",
             labels=["Mag 2"], colors=[(255, 0, 255)])
+            
         self.plot_imu_accel = DataPlotter(
             "IMU Linear Acceleration",
             labels=["Ax", "Ay", "Az"],
             colors=[(255, 80, 80), (80, 255, 80), (80, 120, 255)])
+        self.plot_imu_accel.enableAutoRange(axis='y', enable=False)
+        self.plot_imu_accel.setYRange(-15, 15)
+        
         self.plot_imu_orient = DataPlotter(
             "IMU Orientation",
             labels=["Yaw", "Roll", "Pitch"],
             colors=[(255, 180, 0), (0, 220, 220), (220, 0, 220)])
+        self.plot_imu_orient.enableAutoRange(axis='y', enable=True)
 
         plots_layout.addWidget(self.plot_eit1, 0, 0)
         plots_layout.addWidget(self.plot_eit2, 1, 0)
@@ -309,20 +355,37 @@ class MainWindow(QMainWindow):
         self.lbl_eit_count.setText(f"EIT: {self.eit_packet_count} pkts")
         self.lbl_imu_count.setText(f"IMU: {self.imu_packet_count} pkts")
         self.lbl_skipped.setText(f"Skipped: {self.skipped_line_count}")
+        if self.latest_display_text:
+            self.lbl_last_line.setText(f"Last: {self.latest_display_text}")
+            self.latest_display_text = ""
 
     # ------------------------------------------------------------------
     def _parse_line(self, line):
         """Parse one serial line into EIT or IMU data."""
-        # Debug display (last line)
-        display = line if len(line) <= 80 else line[:77] + "..."
-        self.lbl_last_line.setText(f"Last: {display}")
+        # Strip all invisible characters to ensure exact matching
+        clean_line = line.strip('\x00\r\n\t ')
+        
+        # Debug display (last line) - save text but don't update UI label directly
+        self.latest_display_text = clean_line if len(clean_line) <= 80 else clean_line[:77] + "..."
+
+        if clean_line.startswith("# CALIB:"):
+            parts = clean_line.replace("# CALIB:", "").strip().split(",")
+            if len(parts) == 4:
+                try:
+                    s, g, a, m = int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3])
+                    self.lbl_calib_status.setText(f"Calib[Sys:{s} G:{g} A:{a} M:{m}]")
+                    if self.calib_dialog and self.calib_dialog.isVisible():
+                        self.calib_dialog.update_calib(s, g, a, m)
+                except ValueError:
+                    pass
+            return
 
         # Skip firmware comment / status lines
-        if not line or line[0] == '#' or line[0] == '\r':
+        if not clean_line or clean_line[0] == '#':
             self.skipped_line_count += 1
             return
 
-        parts = line.split(',')
+        parts = clean_line.split(',')
         nfields = len(parts)
 
         # ---- EIT packet (3 columns) ----
@@ -356,6 +419,18 @@ class MainWindow(QMainWindow):
             self.imu_packet_count += 1
             self.last_hardware_timestamp = parts[0].strip()
             t = ts / 1_000_000.0
+            
+            # Continuous Unwrapping for Yaw to prevent 360->0 jumps
+            raw_yaw = vals[0]
+            if self.last_yaw is not None:
+                diff = raw_yaw - (self.last_yaw % 360)
+                if diff > 180:
+                    diff -= 360
+                elif diff < -180:
+                    diff += 360
+                vals[0] = self.last_yaw + diff
+            self.last_yaw = vals[0]
+                
             # vals = [rx, ry, rz, ax, ay, az]
             self.plot_imu_orient.append_sample(t, vals[0:3])
             self.plot_imu_accel.append_sample(t, vals[3:6])
@@ -379,6 +454,18 @@ class MainWindow(QMainWindow):
             self.imu_packet_count += 1
             self.last_hardware_timestamp = parts[0].strip()
             t = ts / 1_000_000.0
+            
+            # Continuous Unwrapping for Yaw to prevent 360->0 jumps
+            raw_yaw = vals[3]  # in 9-col format, yaw is index 3
+            if self.last_yaw is not None:
+                diff = raw_yaw - (self.last_yaw % 360)
+                if diff > 180:
+                    diff -= 360
+                elif diff < -180:
+                    diff += 360
+                vals[3] = self.last_yaw + diff
+            self.last_yaw = vals[3]
+                
             self.plot_eit1.append_sample(t, [mag1])
             self.plot_eit2.append_sample(t, [mag2])
             self.plot_imu_orient.append_sample(t, vals[0:3])
@@ -427,6 +514,10 @@ class MainWindow(QMainWindow):
             self.btn_record.setEnabled(True)
             self.statusBar().showMessage(f"Connected to {port}")
             self.setFocus()
+            
+            # Show calibration dialog
+            self.calib_dialog = CalibrationDialog(self)
+            self.calib_dialog.show()
         else:
             self.serial_worker.stop()
             self.serial_worker = None

@@ -82,6 +82,20 @@ void sample_and_send_data()
     Serial.print(linearAccel.y(), 4); Serial.print(",");
     Serial.print(linearAccel.z(), 4);
     Serial.println();
+    
+    // --- Periodic Calibration Status ---
+    static int calib_counter = 0;
+    if (++calib_counter >= 50) {
+        calib_counter = 0;
+        uint8_t sys, gyro, accel_cal, mag_cal;
+        bno.getCalibration(&sys, &gyro, &accel_cal, &mag_cal);
+        Serial.print("# CALIB: ");
+        Serial.print(sys); Serial.print(",");
+        Serial.print(gyro); Serial.print(",");
+        Serial.print(accel_cal); Serial.print(",");
+        Serial.println(mag_cal);
+    }
+    
     Serial.flush(); // Flush to ensure data is sent immediately
 }
 
