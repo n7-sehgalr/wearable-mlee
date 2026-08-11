@@ -13,7 +13,8 @@ os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QLineEdit, QPushButton,
-                             QComboBox, QMessageBox, QGroupBox, QGridLayout, QDialog)
+                             QComboBox, QMessageBox, QGroupBox, QGridLayout,
+                             QDialog, QCheckBox)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer, QMutex, QMutexLocker
 from PyQt6.QtGui import QFont
 import pyqtgraph as pg
@@ -21,7 +22,36 @@ import pyqtgraph as pg
 try:
     import pyautogui
 except ImportError:
-    pass  # PyAutoGUI is optional
+    pyautogui = None
+
+try:
+    import pygetwindow as gw
+except ImportError:
+    gw = None
+
+
+# ======================================================================
+# Marker definitions — shared between legend UI and key handler
+# ======================================================================
+MARKER_KEYS = {
+    'e': 'EMG Start',
+    'i': 'EIT Start',
+    'c': 'COSMED Start',
+    's': 'Session Start',
+    'x': 'Session End',
+    'l': 'Blood Lactate Sample',
+    'o': 'Other',
+}
+
+MARKER_COLORS = {
+    'e': '#FF6B6B',
+    'i': '#4ECDC4',
+    'c': '#45B7D1',
+    's': '#96CEB4',
+    'x': '#FFEAA7',
+    'l': '#DDA0DD',
+    'o': '#B0BEC5',
+}
 
 
 # ======================================================================
@@ -30,9 +60,9 @@ except ImportError:
 class SerialWorker(QThread):
     """Background thread that reads lines from the serial port.
 
-    Lines are accumulated in a thread-safe deque.  The GUI reads
-    from the deque on a timer — this decouples serial I/O from
-    rendering so the GUI never freezes.
+    Lines are accumulated in a thread-safe deque as (wall_timestamp, line)
+    tuples.  The GUI reads from the deque on a timer — this decouples
+    serial I/O from rendering so the GUI never freezes.
     """
     error_occurred = pyqtSignal(str)
     connection_lost = pyqtSignal()
@@ -48,7 +78,10 @@ class SerialWorker(QThread):
         self._line_queue = collections.deque(maxlen=5000)
 
     def drain_lines(self):
-        """Called from the GUI thread to grab all queued lines at once."""
+        """Called from the GUI thread to grab all queued lines at once.
+
+        Returns a list of (wall_timestamp_iso, line_text) tuples.
+        """
         with QMutexLocker(self._lock):
             lines = list(self._line_queue)
             self._line_queue.clear()
@@ -64,13 +97,14 @@ class SerialWorker(QThread):
                 try:
                     if self.serial_conn.in_waiting > 0:
                         raw = self.serial_conn.readline()
+                        wall_ts = datetime.datetime.now().isoformat()
                         try:
                             line = raw.decode('utf-8', errors='replace').strip()
                         except Exception:
                             continue
                         if line:
                             with QMutexLocker(self._lock):
-                                self._line_queue.append(line)
+                                self._line_queue.append((wall_ts, line))
                     else:
                         self.msleep(1)
                 except serial.SerialException:
@@ -227,6 +261,17 @@ class MainWindow(QMainWindow):
         self.calib_dialog = None
         self.last_yaw = None
 
+        # Session time prefix (set when recording starts, cleared on save)
+        self._session_time_prefix = None
+
+        # Reconnection state
+        self._reconnecting = False
+        self._reconnect_port = None
+        self._reconnect_attempts = 0
+        self._was_recording_before_disconnect = False
+        self._reconnect_timer = QTimer(self)
+        self._reconnect_timer.timeout.connect(self._attempt_reconnect)
+
         self.init_ui()
 
         # ----- Render timer (30 fps) — redraws all four plots -----
@@ -280,8 +325,48 @@ class MainWindow(QMainWindow):
         control_layout.addWidget(self.btn_record, 1, 4)
         control_layout.addWidget(self.btn_save, 1, 5)
 
+        # Row 2: OTBioLab+ sync checkbox and Reconnect button
+        self.chk_otbiolab = QCheckBox("Sync OTBioLab+")
+        self.chk_otbiolab.setToolTip(
+            "When checked, pressing Record will also start recording "
+            "in OTBioLab+ (requires reference button screenshots in "
+            "otbiolab_assets/ folder)")
+        if pyautogui is None or gw is None:
+            self.chk_otbiolab.setEnabled(False)
+            self.chk_otbiolab.setToolTip(
+                "Requires pyautogui and pygetwindow packages")
+        control_layout.addWidget(self.chk_otbiolab, 2, 0, 1, 2)
+
+        self.btn_reconnect = QPushButton("⟳ Reconnect Now")
+        self.btn_reconnect.clicked.connect(self._manual_reconnect)
+        self.btn_reconnect.setVisible(False)
+        self.btn_reconnect.setStyleSheet(
+            "QPushButton { background-color: #e67e22; color: white; "
+            "font-weight: bold; padding: 4px 10px; }")
+        control_layout.addWidget(self.btn_reconnect, 2, 4, 1, 2)
+
         control_group.setLayout(control_layout)
         main_layout.addWidget(control_group)
+
+        # --- Marker Legend ---
+        marker_group = QGroupBox("Marker Keys (press while recording)")
+        marker_layout = QHBoxLayout()
+        marker_group.setLayout(marker_layout)
+
+        # Build legend labels in the order they appear in MARKER_KEYS
+        for key in MARKER_KEYS:
+            name = MARKER_KEYS[key]
+            color = MARKER_COLORS[key]
+            lbl = QLabel(f"  [{key.upper()}] {name}  ")
+            lbl.setStyleSheet(
+                f"background-color: {color}; color: #1a1a2e; "
+                f"border-radius: 4px; padding: 3px 6px; "
+                f"font-weight: bold; font-size: 9pt;")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            marker_layout.addWidget(lbl)
+        marker_layout.addStretch()
+
+        main_layout.addWidget(marker_group)
 
         # --- Status indicators ---
         status_row = QHBoxLayout()
@@ -341,9 +426,9 @@ class MainWindow(QMainWindow):
         if self.serial_worker is None or not self.serial_worker.is_running:
             return
 
-        lines = self.serial_worker.drain_lines()
-        for line in lines:
-            self._parse_line(line)
+        items = self.serial_worker.drain_lines()
+        for wall_ts, line in items:
+            self._parse_line(line, wall_ts)
 
         # Single batch-redraw of all four plots
         self.plot_eit1.redraw()
@@ -360,8 +445,17 @@ class MainWindow(QMainWindow):
             self.latest_display_text = ""
 
     # ------------------------------------------------------------------
-    def _parse_line(self, line):
-        """Parse one serial line into EIT or IMU data."""
+    def _parse_line(self, line, wall_ts):
+        """Parse one serial line into EIT or IMU data.
+
+        Parameters
+        ----------
+        line : str
+            The raw serial line text.
+        wall_ts : str
+            ISO 8601 wall-clock timestamp captured when the line was
+            received from the serial port.
+        """
         # Strip all invisible characters to ensure exact matching
         clean_line = line.strip('\x00\r\n\t ')
         
@@ -405,7 +499,9 @@ class MainWindow(QMainWindow):
             self.plot_eit2.append_sample(t, [mag2])
 
             if self.is_recording:
-                self.eit_data.append([p.strip() for p in parts])
+                self.eit_data.append([
+                    parts[0].strip(), wall_ts,
+                    parts[1].strip(), parts[2].strip()])
 
         # ---- IMU packet (7 columns) ----
         elif nfields == 7:
@@ -436,7 +532,9 @@ class MainWindow(QMainWindow):
             self.plot_imu_accel.append_sample(t, vals[3:6])
 
             if self.is_recording:
-                self.imu_data.append([p.strip() for p in parts])
+                self.imu_data.append([
+                    parts[0].strip(), wall_ts
+                ] + [p.strip() for p in parts[1:]])
 
         # ---- Old combined format (9 columns: ts,m1,m2,rx,ry,rz,ax,ay,az) ----
         elif nfields == 9:
@@ -473,10 +571,11 @@ class MainWindow(QMainWindow):
 
             if self.is_recording:
                 self.eit_data.append([
-                    parts[0].strip(), parts[1].strip(), parts[2].strip()
-                ])
+                    parts[0].strip(), wall_ts,
+                    parts[1].strip(), parts[2].strip()])
                 self.imu_data.append([
-                    parts[0].strip()] + [p.strip() for p in parts[3:]])
+                    parts[0].strip(), wall_ts
+                ] + [p.strip() for p in parts[3:]])
 
         else:
             self.skipped_line_count += 1
@@ -492,6 +591,16 @@ class MainWindow(QMainWindow):
                 f"{p.device}  ({p.description})", p.device)
 
     def toggle_connection(self):
+        # Handle "Cancel Reconnect" click
+        if self._reconnecting:
+            self._reconnect_timer.stop()
+            self._reconnecting = False
+            self.btn_connect.setText("Connect")
+            self.btn_reconnect.setVisible(False)
+            self.btn_record.setEnabled(False)
+            self.statusBar().showMessage("Reconnection cancelled")
+            return
+
         if self.serial_worker is None or not self.serial_worker.is_running:
             idx = self.port_combo.currentIndex()
             if idx < 0:
@@ -527,6 +636,14 @@ class MainWindow(QMainWindow):
 
     def toggle_recording(self):
         if not self.is_recording:
+            # Set time prefix for a new session (not on resume from pause)
+            if self._session_time_prefix is None:
+                self._session_time_prefix = datetime.datetime.now().strftime(
+                    "%H%M%S")
+                # Trigger OTBioLab+ on new session start only
+                if self.chk_otbiolab.isChecked():
+                    self._try_otbiolab_record()
+
             self.is_recording = True
             self.btn_record.setText("Pause")
             self.btn_save.setEnabled(True)
@@ -546,30 +663,212 @@ class MainWindow(QMainWindow):
         self.btn_record.setEnabled(False)
         self.statusBar().showMessage("Connection failed")
 
+    # ------------------------------------------------------------------
+    # Connection-lost handling and auto-reconnection
+    # ------------------------------------------------------------------
     def handle_connection_lost(self):
-        self.statusBar().showMessage("Serial connection lost!")
+        """Called when the serial connection drops unexpectedly.
+
+        Preserves all recorded data and starts an auto-reconnect timer
+        that attempts to re-open the same COM port every 2 seconds.
+        """
+        was_recording = self.is_recording
+        if self.is_recording:
+            self.is_recording = False
+            self.btn_record.setText("Record")
+
+        # Capture port before clearing the worker
         if self.serial_worker:
+            self._reconnect_port = self.serial_worker.port
             self.serial_worker.stop()
             self.serial_worker = None
-        self.btn_connect.setText("Connect")
+
+        self._reconnecting = True
+        self._reconnect_attempts = 0
+        self._was_recording_before_disconnect = was_recording
+
+        self.btn_connect.setText("Cancel Reconnect")
         self.btn_record.setEnabled(False)
+        self.btn_reconnect.setVisible(True)
+
+        self.statusBar().showMessage(
+            f"⚠ CONNECTION LOST — Auto-reconnecting to "
+            f"{self._reconnect_port}...")
+
+        # Start auto-reconnect: try every 2 seconds, up to 30 attempts
+        self._reconnect_timer.start(2000)
+
+    def _attempt_reconnect(self):
+        """Called by the reconnect timer — try to re-open the port."""
+        self._reconnect_attempts += 1
+
+        try:
+            # Probe: can we open the port?
+            test_conn = serial.Serial(
+                self._reconnect_port, 115200, timeout=0.1)
+            test_conn.close()
+            time.sleep(0.1)
+
+            # Success — stop timer and create a fresh worker
+            self._reconnect_timer.stop()
+            self._reconnecting = False
+
+            self.serial_worker = SerialWorker(self._reconnect_port)
+            self.serial_worker.error_occurred.connect(
+                self.handle_serial_error)
+            self.serial_worker.connection_lost.connect(
+                self.handle_connection_lost)
+            self.serial_worker.start()
+
+            self.btn_connect.setText("Disconnect")
+            self.btn_record.setEnabled(True)
+            self.btn_reconnect.setVisible(False)
+
+            if self._was_recording_before_disconnect:
+                self.is_recording = True
+                self.btn_record.setText("Pause")
+                self.btn_save.setEnabled(True)
+                self.statusBar().showMessage(
+                    f"✓ Reconnected to {self._reconnect_port} "
+                    f"— Recording resumed")
+            else:
+                self.statusBar().showMessage(
+                    f"✓ Reconnected to {self._reconnect_port}")
+
+        except (serial.SerialException, OSError):
+            self.statusBar().showMessage(
+                f"⚠ Reconnecting to {self._reconnect_port}... "
+                f"(attempt {self._reconnect_attempts}/30)")
+
+            if self._reconnect_attempts >= 30:
+                self._reconnect_timer.stop()
+                self._reconnecting = False
+                self.btn_connect.setText("Connect")
+                # Keep reconnect button visible for manual retry
+                self.statusBar().showMessage(
+                    "✗ Auto-reconnect failed after 30 attempts. "
+                    "Click 'Reconnect Now' or select a port and Connect.")
+
+    def _manual_reconnect(self):
+        """User clicked the 'Reconnect Now' button."""
+        # If auto-reconnect is still running, reset its counter
+        if self._reconnect_timer.isActive():
+            self._reconnect_timer.stop()
+
+        self._reconnect_attempts = 0
+        self._reconnecting = True
+        self.btn_connect.setText("Cancel Reconnect")
+
+        # Try once immediately, then resume the timer
+        self._attempt_reconnect()
+        if self._reconnecting:
+            self._reconnect_timer.start(2000)
+
+    # ------------------------------------------------------------------
+    # OTBioLab+ integration
+    # ------------------------------------------------------------------
+    def _try_otbiolab_record(self):
+        """Attempt to start recording in OTBioLab+ using image matching.
+
+        Looks for the OTBioLab+ window, locates the Record button via a
+        reference screenshot, and clicks it.  If the Record button is
+        greyed out (not found), it first clicks the Play button, waits,
+        then retries Record.
+
+        Requires reference screenshots placed in the ``otbiolab_assets/``
+        folder alongside this script:
+        - ``record_button.png``  — screenshot of the Record button
+        - ``play_button.png``    — screenshot of the Play button
+        """
+        if pyautogui is None or gw is None:
+            self.statusBar().showMessage(
+                "⚠ pyautogui/pygetwindow not installed — "
+                "OTBioLab+ sync skipped")
+            return
+
+        assets_dir = os.path.join(
+            os.path.dirname(__file__), "otbiolab_assets")
+        record_img = os.path.join(assets_dir, "record_button.png")
+        play_img = os.path.join(assets_dir, "play_button.png")
+
+        if not os.path.exists(record_img):
+            self.statusBar().showMessage(
+                "⚠ record_button.png not found in otbiolab_assets/ — "
+                "add a screenshot of the Record button")
+            return
+
+        try:
+            # Find OTBioLab+ window
+            otb_windows = gw.getWindowsWithTitle("OTBioLab+")
+            if not otb_windows:
+                self.statusBar().showMessage(
+                    "⚠ OTBioLab+ window not found")
+                return
+
+            otb_win = otb_windows[0]
+            otb_win.activate()
+            time.sleep(0.5)
+
+            # Try to find the Record button
+            record_loc = self._locate_image(record_img)
+
+            if record_loc is None and os.path.exists(play_img):
+                # Record might be greyed out — press Play first
+                play_loc = self._locate_image(play_img)
+                if play_loc:
+                    pyautogui.click(pyautogui.center(play_loc))
+                    time.sleep(1.0)
+                    # Retry Record
+                    record_loc = self._locate_image(record_img)
+
+            if record_loc:
+                pyautogui.click(pyautogui.center(record_loc))
+                time.sleep(0.3)
+                self.statusBar().showMessage(
+                    "✓ OTBioLab+ recording started")
+            else:
+                self.statusBar().showMessage(
+                    "⚠ Could not locate Record button in OTBioLab+")
+
+            # Return focus to our window
+            self.activateWindow()
+            self.raise_()
+
+        except Exception as e:
+            self.statusBar().showMessage(
+                f"⚠ OTBioLab+ sync error: {e}")
+            self.activateWindow()
+            self.raise_()
+
+    @staticmethod
+    def _locate_image(img_path):
+        """Locate an image on screen, with graceful opencv fallback."""
+        if pyautogui is None or not os.path.exists(img_path):
+            return None
+        try:
+            # confidence param requires opencv-python
+            return pyautogui.locateOnScreen(img_path, confidence=0.8)
+        except (NotImplementedError, TypeError):
+            # opencv not installed — fall back to exact pixel matching
+            try:
+                return pyautogui.locateOnScreen(img_path)
+            except Exception:
+                return None
+        except Exception:
+            return None
 
     # ------------------------------------------------------------------
     # Keyboard markers
     # ------------------------------------------------------------------
     def keyPressEvent(self, event):
         key = event.text().lower()
-        valid_keys = {
-            'l': 'Lactate',
-            'e': 'Electrode',
-            's': 'Session Start',
-            'o': 'Other',
-        }
-        if key in valid_keys and self.is_recording:
-            timestamp = time.time()
-            event_name = valid_keys[key]
+        if key in MARKER_KEYS and self.is_recording:
+            wall_ts = datetime.datetime.now().isoformat()
+            epoch_ts = time.time()
+            event_name = MARKER_KEYS[key]
             self.markers.append([
-                timestamp, self.last_hardware_timestamp, key, event_name
+                wall_ts, epoch_ts,
+                self.last_hardware_timestamp, key, event_name
             ])
             self.statusBar().showMessage(f"✓ Marker: {event_name}")
         super().keyPressEvent(event)
@@ -591,7 +890,10 @@ class MainWindow(QMainWindow):
                 "Please fill in Participant, Date, and Visit.")
             return
 
-        prefix = f"{participant}_{date_str}_{visit}"
+        # Build prefix with time-of-day to avoid same-day overwrites
+        time_prefix = (self._session_time_prefix
+                       or datetime.datetime.now().strftime("%H%M%S"))
+        prefix = f"{participant}_{date_str}_{visit}_T{time_prefix}"
         target_dir = os.path.join(self.base_dir, prefix)
         os.makedirs(target_dir, exist_ok=True)
 
@@ -599,7 +901,9 @@ class MainWindow(QMainWindow):
 
         if self.eit_data:
             df = pd.DataFrame(
-                self.eit_data, columns=['timestamp_us', 'mag1', 'mag2'])
+                self.eit_data,
+                columns=['timestamp_us', 'wall_timestamp',
+                         'mag1', 'mag2'])
             path = os.path.join(target_dir, f"{prefix}_EIT.csv")
             df.to_csv(path, index=False)
             saved.append(f"EIT ({len(self.eit_data)} rows)")
@@ -607,7 +911,8 @@ class MainWindow(QMainWindow):
         if self.imu_data:
             df = pd.DataFrame(
                 self.imu_data,
-                columns=['timestamp_us', 'rx_yaw', 'ry_roll', 'rz_pitch',
+                columns=['timestamp_us', 'wall_timestamp',
+                         'rx_yaw', 'ry_roll', 'rz_pitch',
                          'ax', 'ay', 'az'])
             path = os.path.join(target_dir, f"{prefix}_IMU.csv")
             df.to_csv(path, index=False)
@@ -616,8 +921,8 @@ class MainWindow(QMainWindow):
         if self.markers:
             df = pd.DataFrame(
                 self.markers,
-                columns=['sys_timestamp', 'hardware_timestamp_us',
-                         'key', 'event'])
+                columns=['wall_timestamp', 'wall_timestamp_epoch',
+                         'hardware_timestamp_us', 'key', 'event'])
             path = os.path.join(target_dir, f"{prefix}_markers.csv")
             df.to_csv(path, index=False)
             saved.append(f"Markers ({len(self.markers)} rows)")
@@ -633,12 +938,41 @@ class MainWindow(QMainWindow):
         self.eit_data.clear()
         self.imu_data.clear()
         self.markers.clear()
+        self._session_time_prefix = None  # Reset for next session
         self.btn_save.setEnabled(False)
 
+    # ------------------------------------------------------------------
+    # Close confirmation
+    # ------------------------------------------------------------------
     def closeEvent(self, event):
-        if self.serial_worker and self.serial_worker.is_running:
-            self.serial_worker.stop()
-        event.accept()
+        has_unsaved = bool(self.eit_data or self.imu_data or self.markers)
+
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Confirm Exit")
+        msg_box.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg_box.setDefaultButton(QMessageBox.StandardButton.No)
+
+        if has_unsaved:
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.setText("You have UNSAVED recorded data!")
+            msg_box.setInformativeText(
+                "Are you sure you want to close? "
+                "All unsaved data will be lost.")
+        else:
+            msg_box.setIcon(QMessageBox.Icon.Question)
+            msg_box.setText(
+                "Are you sure you want to close the application?")
+
+        if msg_box.exec() == QMessageBox.StandardButton.Yes:
+            # Clean up timers and serial
+            if self._reconnect_timer.isActive():
+                self._reconnect_timer.stop()
+            if self.serial_worker and self.serial_worker.is_running:
+                self.serial_worker.stop()
+            event.accept()
+        else:
+            event.ignore()
 
 
 # ======================================================================
