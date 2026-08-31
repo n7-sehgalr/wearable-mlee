@@ -5,9 +5,15 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "ipykernel>=6.29",
+    "kedro>=1.5.0",
+    "matplotlib>=3.10",
+    "numpy>=2.2",
+    "openpyxl>=3.1",
     "pandas>=3.0.5",
     "pyautogui>=0.9.54",
     "pyqt6>=6.11.0",
     "pyqtgraph>=0.14.0",
     "pyserial>=3.5",
+    "scipy>=1.15",
 ]
