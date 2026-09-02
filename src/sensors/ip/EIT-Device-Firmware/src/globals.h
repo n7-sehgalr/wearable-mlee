@@ -3,6 +3,7 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BNO055.h>
 #include <utility/imumaths.h>
+#include <EEPROM.h>
 
 #define lenof(array) ( sizeof(array) / sizeof(array[0]) )
 

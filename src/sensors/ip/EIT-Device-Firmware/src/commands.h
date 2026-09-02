@@ -11,7 +11,15 @@ void LOG(uint16_t v)
 {
     Serial.print(v);
 }
+void LOG(int16_t v)
+{
+    Serial.print(v);
+}
 void LOG(uint32_t v)
+{
+    Serial.print(v);
+}
+void LOG(int32_t v)
 {
     Serial.print(v);
 }
@@ -155,7 +163,7 @@ bool unknownValue(String const & val)
 bool possibleCommands()
 {
     SL(); LOG("Possible commands : ");
-    LOG("stop, start, set, get, help");
+    LOG("stop, start, set, get, help, calibrate");
     LOG("\r\n");
     return true;
 }
@@ -220,7 +228,52 @@ bool getIMUCal(String const & match_to)
     return true;
 }
 
-       
+bool getCalOffsets(String const & match_to)
+{
+    if (match_to != "caloffsets") return false;
+
+    adafruit_bno055_offsets_t offsets;
+    bno.getSensorOffsets(offsets);
+    SL(); LOG("CALIBRATION OFFSETS: ");
+    LOG("Accel: "); LOG(offsets.accel_offset_x); LOG(","); LOG(offsets.accel_offset_y); LOG(","); LOG(offsets.accel_offset_z); LOG(" ");
+    LOG("Mag: "); LOG(offsets.mag_offset_x); LOG(","); LOG(offsets.mag_offset_y); LOG(","); LOG(offsets.mag_offset_z); LOG(" ");
+    LOG("Gyro: "); LOG(offsets.gyro_offset_x); LOG(","); LOG(offsets.gyro_offset_y); LOG(","); LOG(offsets.gyro_offset_z); LOG(" ");
+    LOG("Radius: "); LOG(offsets.accel_radius); LOG(","); LOG(offsets.mag_radius);
+    LOG("\r\n");
+
+    return true;
+}
+
+bool calibrateCommand(String const & command, String const & arguments) 
+{
+    if (command != "calibrate") return false;
+    if (arguments == "save") {
+        uint8_t sys, gyro, accel, mag;
+        bno.getCalibration(&sys, &gyro, &accel, &mag);
+        if (sys == 3 && gyro == 3 && accel == 3 && mag == 3) {
+            adafruit_bno055_offsets_t offsets;
+            bno.getSensorOffsets(offsets);
+            EEPROM.write(0, 0xAB);
+            EEPROM.put(1, offsets);
+            SL(); LOG("# CALIBRATION SAVED\r\n");
+        } else {
+            SL(); LOG("# CALIBRATION FAILED: All subsystems must be at level 3\r\n");
+        }
+        return true;
+    } else if (arguments == "load") {
+        if (EEPROM.read(0) == 0xAB) {
+            adafruit_bno055_offsets_t offsets;
+            EEPROM.get(1, offsets);
+            bno.setSensorOffsets(offsets);
+            SL(); LOG("# CALIBRATION LOADED\r\n");
+        } else {
+            SL(); LOG("# NO SAVED CALIBRATION\r\n");
+        }
+        return true;
+    }
+    return false;
+}
+
 
 bool getConfigCommand(String const & command, String const & arguments) 
 {
@@ -230,6 +283,7 @@ bool getConfigCommand(String const & command, String const & arguments)
 
     return getAll(arguments)
     || getIMUCal(arguments)
+    || getCalOffsets(arguments)
     || getDirectE<Modes>("mode"      , "mode"              , arguments, g_eMode                   )
     || getDirectE<DACModes>("dacMode", "dacmode"           , arguments, g_eDACMode                )
 
@@ -344,6 +398,7 @@ bool processCommands()
             || setConfigCommand(command, arguments)
             || getConfigCommand(command, arguments)
             || runCommand(command, arguments)
+            || calibrateCommand(command, arguments)
             || unknownCommand(command);
 
     Serial.clear();

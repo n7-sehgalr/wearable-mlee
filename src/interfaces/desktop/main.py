@@ -3,8 +3,11 @@ import os
 import time
 import datetime
 import collections
+import queue
+import logging
+import traceback
+
 import numpy as np
-import pandas as pd
 import serial
 import serial.tools.list_ports
 
@@ -29,29 +32,40 @@ try:
 except ImportError:
     gw = None
 
+from .constants import (
+    MARKER_KEYS, MARKER_COLORS,
+    TAG_EIT, TAG_IMU, TAG_MARKER, TAG_SHUTDOWN,
+    EIT_CSV_COLUMNS, IMU_CSV_COLUMNS_SHORT, IMU_CSV_COLUMNS_FULL,
+    MARKER_CSV_COLUMNS,
+    EIT_FIELD_COUNT, IMU_FIELD_COUNT_SHORT, IMU_FIELD_COUNT_FULL,
+    COMBINED_FIELD_COUNT_OLD,
+    SERIAL_BAUDRATE, SERIAL_QUEUE_MAXLEN, SERIAL_READ_TIMEOUT,
+    RECONNECT_INTERVAL_MS, RECONNECT_MAX_ATTEMPTS,
+    RENDER_FPS, RENDER_INTERVAL_MS,
+    MARKER_DEDUP_INTERVAL_MS, MARKER_RECENT_LOG_SIZE,
+    MARKER_FEEDBACK_DURATION_MS,
+    EIT_DISPLAY_MAX_POINTS, IMU_DISPLAY_MAX_POINTS,
+    EIT_SMOOTHING_METHOD, EIT_EMA_CUTOFF_HZ, EIT_MA_WINDOW_SAMPLES,
+    WRITER_QUEUE_MAXSIZE, WRITER_SHUTDOWN_TIMEOUT_S,
+    SESSION_TIME_FORMAT, SESSION_DATE_FORMAT,
+    DEFAULT_DATA_DIR, PARTICIPANT_DB_FILENAME,
+)
+from .plotter import DataPlotter
+from .writer import FileWriterThread
+from .session import SessionInfo, create_session, resume_session
+from .participant_db import ParticipantDB
+from .participant_dialog import ParticipantDialog
+from .calibration import StaticCalibrationDialog
 
 # ======================================================================
-# Marker definitions — shared between legend UI and key handler
+# Configure logging
 # ======================================================================
-MARKER_KEYS = {
-    'e': 'EMG Start',
-    'i': 'EIT Start',
-    'c': 'COSMED Start',
-    's': 'Session Start',
-    'x': 'Session End',
-    'l': 'Blood Lactate Sample',
-    'o': 'Other',
-}
-
-MARKER_COLORS = {
-    'e': '#FF6B6B',
-    'i': '#4ECDC4',
-    'c': '#45B7D1',
-    's': '#96CEB4',
-    'x': '#FFEAA7',
-    'l': '#DDA0DD',
-    'o': '#B0BEC5',
-}
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    handlers=[logging.StreamHandler()],
+)
+logger = logging.getLogger(__name__)
 
 
 # ======================================================================
@@ -67,7 +81,7 @@ class SerialWorker(QThread):
     error_occurred = pyqtSignal(str)
     connection_lost = pyqtSignal()
 
-    def __init__(self, port, baudrate=115200):
+    def __init__(self, port, baudrate=SERIAL_BAUDRATE):
         super().__init__()
         self.port = port
         self.baudrate = baudrate
@@ -75,7 +89,7 @@ class SerialWorker(QThread):
         self.is_running = False
         # Thread-safe line buffer (main thread drains it on a timer)
         self._lock = QMutex()
-        self._line_queue = collections.deque(maxlen=5000)
+        self._line_queue = collections.deque(maxlen=SERIAL_QUEUE_MAXLEN)
 
     def drain_lines(self):
         """Called from the GUI thread to grab all queued lines at once.
@@ -90,7 +104,7 @@ class SerialWorker(QThread):
     def run(self):
         try:
             self.serial_conn = serial.Serial(
-                self.port, self.baudrate, timeout=0.05
+                self.port, self.baudrate, timeout=SERIAL_READ_TIMEOUT
             )
             self.is_running = True
             while self.is_running:
@@ -128,105 +142,14 @@ class SerialWorker(QThread):
         self.is_running = False
         self.wait(2000)
 
-
-# ======================================================================
-# Plot Widget — only stores data; redraws are triggered externally
-# ======================================================================
-class DataPlotter(pg.PlotWidget):
-    """Real-time scrolling plot with optional moving-average smoothing."""
-
-    def __init__(self, title, labels=None, colors=None, max_points=500):
-        super().__init__()
-        self.setTitle(title, color='w', size='10pt')
-        self.showGrid(x=True, y=True, alpha=0.3)
-        self.addLegend(offset=(10, 10))
-        self.setLabel('bottom', 'Time', units='s')
-        self.max_points = max_points
-        self.curves = []
-        self.enableAutoRange(axis='y')
-        self.enableAutoRange(axis='x', enable=False)
-        self.setXRange(0, max_points, padding=0)
-
-        if labels is None:
-            labels = ["Data"]
-        if colors is None:
-            colors = [(255, 0, 0)]
-
-        self.labels = labels
-        self.data_buffers = {label: np.zeros(max_points) for label in labels}
-        self.ptr = 0  # total samples received (clamped to max_points)
-        self._dirty = False  # whether new data arrived since last redraw
-
-        for i, label in enumerate(labels):
-            color = colors[i % len(colors)]
-            curve = self.plot(pen=pg.mkPen(color=color, width=2), name=label)
-            self.curves.append((label, curve))
-
-    def append_sample(self, t, values):
-        """Append one sample to the ring buffer (cheap, no redraw)."""
-        for i, (label, _curve) in enumerate(self.curves):
-            self.data_buffers[label][:-1] = self.data_buffers[label][1:]
-            self.data_buffers[label][-1] = values[i]
-
-        if self.ptr < self.max_points:
-            self.ptr += 1
-        self._dirty = True
-
-    def redraw(self):
-        """Redraw curves from ring buffer.  Called from the GUI timer."""
-        if not self._dirty:
-            return
-        self._dirty = False
-
-        # Only show the portion of the buffer that has real data
-        start = max(0, self.max_points - self.ptr)
-
-        for label, curve in self.curves:
-            y = self.data_buffers[label][start:]
-            # Plot against static X axis (indices) to eliminate pyqtgraph autoscaling jitter
-            curve.setData(y)
-
-
-# ======================================================================
-# Calibration Dialog
-# ======================================================================
-class CalibrationDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("IMU Calibration")
-        self.resize(350, 200)
-        layout = QVBoxLayout(self)
-        
-        self.lbl_info = QLabel(
-            "<b>IMU Calibration Required</b><br><br>"
-            "1. <b>Gyroscope:</b> Leave the device resting completely still on a flat surface.<br>"
-            "2. <b>Magnetometer:</b> Move the device in a figure-8 motion."
-        )
-        self.lbl_info.setWordWrap(True)
-        layout.addWidget(self.lbl_info)
-        
-        self.lbl_sys = QLabel("System: 0/3")
-        self.lbl_gyro = QLabel("Gyroscope: 0/3")
-        self.lbl_accel = QLabel("Accelerometer: 0/3")
-        self.lbl_mag = QLabel("Magnetometer: 0/3")
-        
-        layout.addWidget(self.lbl_sys)
-        layout.addWidget(self.lbl_gyro)
-        layout.addWidget(self.lbl_accel)
-        layout.addWidget(self.lbl_mag)
-        
-        self.btn_start = QPushButton("Start Session (Bypass)")
-        self.btn_start.clicked.connect(self.accept)
-        layout.addWidget(self.btn_start)
-        
-    def update_calib(self, sys_cal, gyro, accel, mag):
-        self.lbl_sys.setText(f"System: {sys_cal}/3")
-        self.lbl_gyro.setText(f"Gyroscope: {gyro}/3")
-        self.lbl_accel.setText(f"Accelerometer: {accel}/3")
-        self.lbl_mag.setText(f"Magnetometer: {mag}/3")
-        if sys_cal == 3 and gyro == 3 and accel == 3 and mag == 3:
-            self.btn_start.setText("Start Session (Fully Calibrated)")
-            self.btn_start.setStyleSheet("background-color: green; color: white;")
+    def send_command(self, cmd: str):
+        """Send a command string to the serial port (for calibration etc.)."""
+        if self.serial_conn and self.serial_conn.is_open:
+            try:
+                self.serial_conn.write((cmd + "\n").encode('utf-8'))
+                self.serial_conn.flush()
+            except serial.SerialException as e:
+                logger.error(f"Failed to send command '{cmd}': {e}")
 
 
 # ======================================================================
@@ -236,33 +159,39 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Wearable EIT & IMU Logger")
-        self.resize(1100, 850)
+        self.resize(1100, 900)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         # State
         self.is_recording = False
         self.serial_worker = None
-        self.base_dir = os.path.abspath(
-            os.path.join(os.path.dirname(__file__),
-                         "..", "..", "..", "data", "01_raw")
-        )
+        self.base_dir = DEFAULT_DATA_DIR
+        os.makedirs(self.base_dir, exist_ok=True)
 
         # Counters
         self.eit_packet_count = 0
         self.imu_packet_count = 0
         self.skipped_line_count = 0
 
-        # Buffers for saving
-        self.eit_data = []
-        self.imu_data = []
-        self.markers = []
+        # Current hardware timestamp (string) for markers
         self.last_hardware_timestamp = "0"
         self.latest_display_text = ""
         self.calib_dialog = None
         self.last_yaw = None
 
-        # Session time prefix (set when recording starts, cleared on save)
+        # Writer thread state
+        self._writer_thread = None
+        self._writer_queue = None
+        self._session_info = None
+
+        # Marker deduplication
+        self._last_marker_times = {}
+
+        # Session time prefix (set when recording starts)
         self._session_time_prefix = None
+
+        # Detected IMU format
+        self._imu_field_count = IMU_FIELD_COUNT_FULL
 
         # Reconnection state
         self._reconnecting = False
@@ -272,12 +201,16 @@ class MainWindow(QMainWindow):
         self._reconnect_timer = QTimer(self)
         self._reconnect_timer.timeout.connect(self._attempt_reconnect)
 
+        # Participant DB
+        db_path = os.path.join(self.base_dir, PARTICIPANT_DB_FILENAME)
+        self._participant_db = ParticipantDB(db_path)
+
         self.init_ui()
 
-        # ----- Render timer (30 fps) — redraws all four plots -----
+        # ----- Render timer (~30 fps) — redraws all plots -----
         self.render_timer = QTimer(self)
         self.render_timer.timeout.connect(self._render_tick)
-        self.render_timer.start(33)  # ~30 fps
+        self.render_timer.start(RENDER_INTERVAL_MS)
 
     # ------------------------------------------------------------------
     def init_ui(self):
@@ -291,7 +224,7 @@ class MainWindow(QMainWindow):
 
         self.part_input = QLineEdit("P01")
         self.date_input = QLineEdit(
-            datetime.datetime.now().strftime("%Y%m%d"))
+            datetime.datetime.now().strftime(SESSION_DATE_FORMAT))
         self.visit_input = QLineEdit("V1")
 
         control_layout.addWidget(QLabel("Participant ID:"), 0, 0)
@@ -325,7 +258,7 @@ class MainWindow(QMainWindow):
         control_layout.addWidget(self.btn_record, 1, 4)
         control_layout.addWidget(self.btn_save, 1, 5)
 
-        # Row 2: OTBioLab+ sync checkbox and Reconnect button
+        # Row 2: OTBioLab+, Reconnect, Participant DB
         self.chk_otbiolab = QCheckBox("Sync OTBioLab+")
         self.chk_otbiolab.setToolTip(
             "When checked, pressing Record will also start recording "
@@ -336,6 +269,11 @@ class MainWindow(QMainWindow):
             self.chk_otbiolab.setToolTip(
                 "Requires pyautogui and pygetwindow packages")
         control_layout.addWidget(self.chk_otbiolab, 2, 0, 1, 2)
+
+        self.btn_participants = QPushButton("📋 Participants")
+        self.btn_participants.clicked.connect(self._open_participant_dialog)
+        self.btn_participants.setToolTip("Open participant database")
+        control_layout.addWidget(self.btn_participants, 2, 2)
 
         self.btn_reconnect = QPushButton("⟳ Reconnect Now")
         self.btn_reconnect.clicked.connect(self._manual_reconnect)
@@ -353,7 +291,6 @@ class MainWindow(QMainWindow):
         marker_layout = QHBoxLayout()
         marker_group.setLayout(marker_layout)
 
-        # Build legend labels in the order they appear in MARKER_KEYS
         for key in MARKER_KEYS:
             name = MARKER_KEYS[key]
             color = MARKER_COLORS[key]
@@ -385,28 +322,54 @@ class MainWindow(QMainWindow):
         status_row.addStretch()
         main_layout.addLayout(status_row)
 
+        # --- Writer status row ---
+        writer_row = QHBoxLayout()
+        self.lbl_writer_status = QLabel("Writer: idle")
+        self.lbl_writer_status.setFont(QFont("Consolas", 9))
+        writer_row.addWidget(self.lbl_writer_status)
+        writer_row.addStretch()
+        main_layout.addLayout(writer_row)
+
+        # --- Recent Markers log ---
+        self.lbl_recent_markers = QLabel("")
+        self.lbl_recent_markers.setFont(QFont("Consolas", 8))
+        self.lbl_recent_markers.setStyleSheet("color: #aaa;")
+        self._recent_markers = []
+        main_layout.addWidget(self.lbl_recent_markers)
+
         # --- Plots ---
         plots_layout = QGridLayout()
 
         self.plot_eit1 = DataPlotter(
             "EIT Channel 1 Magnitude",
-            labels=["Mag 1"], colors=[(0, 255, 255)])
+            labels=["Mag 1"], colors=[(0, 255, 255)],
+            max_points=EIT_DISPLAY_MAX_POINTS,
+            enable_smoothing=True,
+            smoothing_method=EIT_SMOOTHING_METHOD,
+            ema_cutoff_hz=EIT_EMA_CUTOFF_HZ,
+            ma_window=EIT_MA_WINDOW_SAMPLES)
         self.plot_eit2 = DataPlotter(
             "EIT Channel 2 Magnitude",
-            labels=["Mag 2"], colors=[(255, 0, 255)])
-            
+            labels=["Mag 2"], colors=[(255, 0, 255)],
+            max_points=EIT_DISPLAY_MAX_POINTS,
+            enable_smoothing=True,
+            smoothing_method=EIT_SMOOTHING_METHOD,
+            ema_cutoff_hz=EIT_EMA_CUTOFF_HZ,
+            ma_window=EIT_MA_WINDOW_SAMPLES)
+
         self.plot_imu_accel = DataPlotter(
             "IMU Linear Acceleration",
             labels=["Ax", "Ay", "Az"],
-            colors=[(255, 80, 80), (80, 255, 80), (80, 120, 255)])
+            colors=[(255, 80, 80), (80, 255, 80), (80, 120, 255)],
+            max_points=IMU_DISPLAY_MAX_POINTS)
         self.plot_imu_accel.enableAutoRange(axis='y', enable=False)
         self.plot_imu_accel.setYRange(-15, 15)
-        
+
         self.plot_imu_orient = DataPlotter(
             "IMU Orientation",
             labels=["Yaw", "Roll", "Pitch"],
-            colors=[(255, 180, 0), (0, 220, 220), (220, 0, 220)])
-        self.plot_imu_orient.enableAutoRange(axis='y', enable=True)
+            colors=[(255, 180, 0), (0, 220, 220), (220, 0, 220)],
+            max_points=IMU_DISPLAY_MAX_POINTS)
 
         plots_layout.addWidget(self.plot_eit1, 0, 0)
         plots_layout.addWidget(self.plot_eit2, 1, 0)
@@ -419,7 +382,7 @@ class MainWindow(QMainWindow):
             "Ready — Close Arduino IDE Serial Monitor before connecting")
 
     # ------------------------------------------------------------------
-    # Render tick — called at 30 fps
+    # Render tick — called at ~30 fps
     # ------------------------------------------------------------------
     def _render_tick(self):
         """Drain the serial queue, parse every line, then redraw plots once."""
@@ -427,8 +390,18 @@ class MainWindow(QMainWindow):
             return
 
         items = self.serial_worker.drain_lines()
-        for wall_ts, line in items:
+
+        # Bound how many items we process per tick to keep GUI responsive
+        MAX_ITEMS_PER_TICK = 200
+        for wall_ts, line in items[:MAX_ITEMS_PER_TICK]:
             self._parse_line(line, wall_ts)
+
+        # If we couldn't process everything, remaining items were already
+        # drained from the serial deque — they must still go to the writer.
+        # Enqueue them directly without display processing.
+        if len(items) > MAX_ITEMS_PER_TICK:
+            for wall_ts, line in items[MAX_ITEMS_PER_TICK:]:
+                self._parse_line_write_only(line, wall_ts)
 
         # Single batch-redraw of all four plots
         self.plot_eit1.redraw()
@@ -448,18 +421,9 @@ class MainWindow(QMainWindow):
     def _parse_line(self, line, wall_ts):
         """Parse one serial line into EIT or IMU data.
 
-        Parameters
-        ----------
-        line : str
-            The raw serial line text.
-        wall_ts : str
-            ISO 8601 wall-clock timestamp captured when the line was
-            received from the serial port.
+        Updates display plots AND enqueues to the writer if recording.
         """
-        # Strip all invisible characters to ensure exact matching
         clean_line = line.strip('\x00\r\n\t ')
-        
-        # Debug display (last line) - save text but don't update UI label directly
         self.latest_display_text = clean_line if len(clean_line) <= 80 else clean_line[:77] + "..."
 
         if clean_line.startswith("# CALIB:"):
@@ -474,6 +438,24 @@ class MainWindow(QMainWindow):
                     pass
             return
 
+        if clean_line.startswith("# CALIBRATION:"):
+            # Firmware calibration load status
+            if self.calib_dialog and self.calib_dialog.isVisible():
+                if "Loaded" in clean_line:
+                    self.calib_dialog.show_loaded_status()
+            self.statusBar().showMessage(clean_line)
+            return
+
+        if clean_line.startswith("# CALIBRATION SAVED"):
+            self.statusBar().showMessage("✓ Calibration saved to EEPROM")
+            return
+
+        if clean_line.startswith("# CALIBRATION LOADED"):
+            self.statusBar().showMessage("✓ Calibration loaded from EEPROM")
+            if self.calib_dialog and self.calib_dialog.isVisible():
+                self.calib_dialog.show_loaded_status()
+            return
+
         # Skip firmware comment / status lines
         if not clean_line or clean_line[0] == '#':
             self.skipped_line_count += 1
@@ -483,7 +465,7 @@ class MainWindow(QMainWindow):
         nfields = len(parts)
 
         # ---- EIT packet (3 columns) ----
-        if nfields == 3:
+        if nfields == EIT_FIELD_COUNT:
             try:
                 ts = float(parts[0])
                 mag1 = float(parts[1])
@@ -498,13 +480,16 @@ class MainWindow(QMainWindow):
             self.plot_eit1.append_sample(t, [mag1])
             self.plot_eit2.append_sample(t, [mag2])
 
-            if self.is_recording:
-                self.eit_data.append([
-                    parts[0].strip(), wall_ts,
-                    parts[1].strip(), parts[2].strip()])
+            if self.is_recording and self._writer_queue is not None:
+                row = [parts[0].strip(), wall_ts,
+                       parts[1].strip(), parts[2].strip()]
+                try:
+                    self._writer_queue.put_nowait((TAG_EIT, row))
+                except queue.Full:
+                    logger.warning("Writer queue full — EIT row dropped")
 
-        # ---- IMU packet (7 columns) ----
-        elif nfields == 7:
+        # ---- IMU packet (7 or 16 columns) ----
+        elif nfields in (IMU_FIELD_COUNT_SHORT, IMU_FIELD_COUNT_FULL):
             try:
                 ts = float(parts[0])
                 vals = [float(p) for p in parts[1:]]
@@ -513,9 +498,10 @@ class MainWindow(QMainWindow):
                 return
 
             self.imu_packet_count += 1
+            self._imu_field_count = nfields
             self.last_hardware_timestamp = parts[0].strip()
             t = ts / 1_000_000.0
-            
+
             # Continuous Unwrapping for Yaw to prevent 360->0 jumps
             raw_yaw = vals[0]
             if self.last_yaw is not None:
@@ -526,18 +512,20 @@ class MainWindow(QMainWindow):
                     diff += 360
                 vals[0] = self.last_yaw + diff
             self.last_yaw = vals[0]
-                
-            # vals = [rx, ry, rz, ax, ay, az]
+
+            # vals[0:3] = orientation, vals[3:6] = linear accel
             self.plot_imu_orient.append_sample(t, vals[0:3])
             self.plot_imu_accel.append_sample(t, vals[3:6])
 
-            if self.is_recording:
-                self.imu_data.append([
-                    parts[0].strip(), wall_ts
-                ] + [p.strip() for p in parts[1:]])
+            if self.is_recording and self._writer_queue is not None:
+                row = [parts[0].strip(), wall_ts] + [p.strip() for p in parts[1:]]
+                try:
+                    self._writer_queue.put_nowait((TAG_IMU, row))
+                except queue.Full:
+                    logger.warning("Writer queue full — IMU row dropped")
 
-        # ---- Old combined format (9 columns: ts,m1,m2,rx,ry,rz,ax,ay,az) ----
-        elif nfields == 9:
+        # ---- Old combined format (9 columns) ----
+        elif nfields == COMBINED_FIELD_COUNT_OLD:
             try:
                 ts = float(parts[0])
                 mag1 = float(parts[1])
@@ -547,38 +535,83 @@ class MainWindow(QMainWindow):
                 self.skipped_line_count += 1
                 return
 
-            # Treat as both EIT + IMU
             self.eit_packet_count += 1
             self.imu_packet_count += 1
             self.last_hardware_timestamp = parts[0].strip()
             t = ts / 1_000_000.0
-            
-            # Continuous Unwrapping for Yaw to prevent 360->0 jumps
-            raw_yaw = vals[3]  # in 9-col format, yaw is index 3
+
+            # Yaw unwrapping
+            raw_yaw = vals[0]
             if self.last_yaw is not None:
                 diff = raw_yaw - (self.last_yaw % 360)
                 if diff > 180:
                     diff -= 360
                 elif diff < -180:
                     diff += 360
-                vals[3] = self.last_yaw + diff
-            self.last_yaw = vals[3]
-                
+                vals[0] = self.last_yaw + diff
+            self.last_yaw = vals[0]
+
             self.plot_eit1.append_sample(t, [mag1])
             self.plot_eit2.append_sample(t, [mag2])
             self.plot_imu_orient.append_sample(t, vals[0:3])
             self.plot_imu_accel.append_sample(t, vals[3:6])
 
-            if self.is_recording:
-                self.eit_data.append([
-                    parts[0].strip(), wall_ts,
-                    parts[1].strip(), parts[2].strip()])
-                self.imu_data.append([
-                    parts[0].strip(), wall_ts
-                ] + [p.strip() for p in parts[3:]])
-
+            if self.is_recording and self._writer_queue is not None:
+                eit_row = [parts[0].strip(), wall_ts,
+                           parts[1].strip(), parts[2].strip()]
+                imu_row = [parts[0].strip(), wall_ts] + [p.strip() for p in parts[3:]]
+                try:
+                    self._writer_queue.put_nowait((TAG_EIT, eit_row))
+                    self._writer_queue.put_nowait((TAG_IMU, imu_row))
+                except queue.Full:
+                    logger.warning("Writer queue full — combined row dropped")
         else:
             self.skipped_line_count += 1
+
+    # ------------------------------------------------------------------
+    def _parse_line_write_only(self, line, wall_ts):
+        """Parse a line and enqueue to writer only (no display update).
+
+        Used when the GUI render tick has too many items to process.
+        """
+        if not self.is_recording or self._writer_queue is None:
+            return
+
+        clean_line = line.strip('\x00\r\n\t ')
+        if not clean_line or clean_line[0] == '#':
+            return
+
+        parts = clean_line.split(',')
+        nfields = len(parts)
+
+        try:
+            if nfields == EIT_FIELD_COUNT:
+                float(parts[0])  # validate
+                row = [parts[0].strip(), wall_ts,
+                       parts[1].strip(), parts[2].strip()]
+                self._writer_queue.put_nowait((TAG_EIT, row))
+                self.eit_packet_count += 1
+                self.last_hardware_timestamp = parts[0].strip()
+
+            elif nfields in (IMU_FIELD_COUNT_SHORT, IMU_FIELD_COUNT_FULL):
+                float(parts[0])
+                row = [parts[0].strip(), wall_ts] + [p.strip() for p in parts[1:]]
+                self._writer_queue.put_nowait((TAG_IMU, row))
+                self.imu_packet_count += 1
+                self.last_hardware_timestamp = parts[0].strip()
+
+            elif nfields == COMBINED_FIELD_COUNT_OLD:
+                float(parts[0])
+                eit_row = [parts[0].strip(), wall_ts,
+                           parts[1].strip(), parts[2].strip()]
+                imu_row = [parts[0].strip(), wall_ts] + [p.strip() for p in parts[3:]]
+                self._writer_queue.put_nowait((TAG_EIT, eit_row))
+                self._writer_queue.put_nowait((TAG_IMU, imu_row))
+                self.eit_packet_count += 1
+                self.imu_packet_count += 1
+                self.last_hardware_timestamp = parts[0].strip()
+        except (ValueError, queue.Full):
+            pass
 
     # ------------------------------------------------------------------
     # Connection management
@@ -623,9 +656,13 @@ class MainWindow(QMainWindow):
             self.btn_record.setEnabled(True)
             self.statusBar().showMessage(f"Connected to {port}")
             self.setFocus()
-            
+
             # Show calibration dialog
-            self.calib_dialog = CalibrationDialog(self)
+            self.calib_dialog = StaticCalibrationDialog(self)
+            self.calib_dialog.save_requested.connect(
+                lambda: self.serial_worker.send_command("calibrate save"))
+            self.calib_dialog.load_requested.connect(
+                lambda: self.serial_worker.send_command("calibrate load"))
             self.calib_dialog.show()
         else:
             self.serial_worker.stop()
@@ -636,22 +673,73 @@ class MainWindow(QMainWindow):
 
     def toggle_recording(self):
         if not self.is_recording:
-            # Set time prefix for a new session (not on resume from pause)
-            if self._session_time_prefix is None:
-                self._session_time_prefix = datetime.datetime.now().strftime(
-                    "%H%M%S")
-                # Trigger OTBioLab+ on new session start only
+            # Start recording — create session and writer
+            if self._session_info is None:
+                participant = self.part_input.text().strip()
+                date_str = self.date_input.text().strip()
+                visit = self.visit_input.text().strip()
+
+                if not participant or not date_str or not visit:
+                    QMessageBox.warning(
+                        self, "Error",
+                        "Please fill in Participant, Date, and Visit.")
+                    return
+
+                time_prefix = datetime.datetime.now().strftime(SESSION_TIME_FORMAT)
+                self._session_time_prefix = time_prefix
+
+                try:
+                    self._session_info = create_session(
+                        participant, date_str, visit,
+                        self.base_dir, time_prefix)
+                except Exception as e:
+                    QMessageBox.critical(self, "Session Error", str(e))
+                    return
+
+                # Record session in participant DB
+                try:
+                    # Ensure participant exists
+                    if not self._participant_db.get_participant(participant):
+                        self._participant_db.add_participant(participant)
+                    self._participant_db.add_session_record(
+                        participant, date_str, visit,
+                        self._session_info.session_id)
+                except Exception as e:
+                    logger.warning(f"Failed to record session in DB: {e}")
+
+                # Determine IMU columns
+                if self._imu_field_count == IMU_FIELD_COUNT_SHORT:
+                    imu_cols = IMU_CSV_COLUMNS_SHORT
+                else:
+                    imu_cols = IMU_CSV_COLUMNS_FULL
+
+                # Create writer thread
+                self._writer_queue = queue.Queue(maxsize=WRITER_QUEUE_MAXSIZE)
+                self._writer_thread = FileWriterThread(
+                    self._writer_queue,
+                    self._session_info.eit_path,
+                    self._session_info.imu_path,
+                    self._session_info.marker_path,
+                    imu_columns=imu_cols)
+                self._writer_thread.writer_error.connect(self._on_writer_error)
+                self._writer_thread.queue_warning.connect(self._on_queue_warning)
+                self._writer_thread.session_saved.connect(self._on_session_saved)
+                self._writer_thread.rows_written.connect(self._on_rows_written)
+                self._writer_thread.start()
+
+                # Trigger OTBioLab+ on new session start
                 if self.chk_otbiolab.isChecked():
                     self._try_otbiolab_record()
 
             self.is_recording = True
             self.btn_record.setText("Pause")
             self.btn_save.setEnabled(True)
-            self.statusBar().showMessage("Recording...")
+            self.statusBar().showMessage(
+                f"Recording to {self._session_info.folder_path}")
         else:
             self.is_recording = False
             self.btn_record.setText("Record")
-            self.statusBar().showMessage("Paused")
+            self.statusBar().showMessage("Paused (data on disk is safe)")
         self.setFocus()
 
     def handle_serial_error(self, err):
@@ -669,15 +757,13 @@ class MainWindow(QMainWindow):
     def handle_connection_lost(self):
         """Called when the serial connection drops unexpectedly.
 
-        Preserves all recorded data and starts an auto-reconnect timer
-        that attempts to re-open the same COM port every 2 seconds.
+        The writer thread keeps files open — reconnection resumes writing.
         """
         was_recording = self.is_recording
         if self.is_recording:
             self.is_recording = False
             self.btn_record.setText("Record")
 
-        # Capture port before clearing the worker
         if self.serial_worker:
             self._reconnect_port = self.serial_worker.port
             self.serial_worker.stop()
@@ -693,23 +779,19 @@ class MainWindow(QMainWindow):
 
         self.statusBar().showMessage(
             f"⚠ CONNECTION LOST — Auto-reconnecting to "
-            f"{self._reconnect_port}...")
+            f"{self._reconnect_port}... (session preserved on disk)")
 
-        # Start auto-reconnect: try every 2 seconds, up to 30 attempts
-        self._reconnect_timer.start(2000)
+        self._reconnect_timer.start(RECONNECT_INTERVAL_MS)
 
     def _attempt_reconnect(self):
-        """Called by the reconnect timer — try to re-open the port."""
         self._reconnect_attempts += 1
 
         try:
-            # Probe: can we open the port?
             test_conn = serial.Serial(
-                self._reconnect_port, 115200, timeout=0.1)
+                self._reconnect_port, SERIAL_BAUDRATE, timeout=0.1)
             test_conn.close()
             time.sleep(0.1)
 
-            # Success — stop timer and create a fresh worker
             self._reconnect_timer.stop()
             self._reconnecting = False
 
@@ -738,20 +820,17 @@ class MainWindow(QMainWindow):
         except (serial.SerialException, OSError):
             self.statusBar().showMessage(
                 f"⚠ Reconnecting to {self._reconnect_port}... "
-                f"(attempt {self._reconnect_attempts}/30)")
+                f"(attempt {self._reconnect_attempts}/{RECONNECT_MAX_ATTEMPTS})")
 
-            if self._reconnect_attempts >= 30:
+            if self._reconnect_attempts >= RECONNECT_MAX_ATTEMPTS:
                 self._reconnect_timer.stop()
                 self._reconnecting = False
                 self.btn_connect.setText("Connect")
-                # Keep reconnect button visible for manual retry
                 self.statusBar().showMessage(
-                    "✗ Auto-reconnect failed after 30 attempts. "
+                    "✗ Auto-reconnect failed. "
                     "Click 'Reconnect Now' or select a port and Connect.")
 
     def _manual_reconnect(self):
-        """User clicked the 'Reconnect Now' button."""
-        # If auto-reconnect is still running, reset its counter
         if self._reconnect_timer.isActive():
             self._reconnect_timer.stop()
 
@@ -759,27 +838,85 @@ class MainWindow(QMainWindow):
         self._reconnecting = True
         self.btn_connect.setText("Cancel Reconnect")
 
-        # Try once immediately, then resume the timer
         self._attempt_reconnect()
         if self._reconnecting:
-            self._reconnect_timer.start(2000)
+            self._reconnect_timer.start(RECONNECT_INTERVAL_MS)
+
+    # ------------------------------------------------------------------
+    # Writer callbacks
+    # ------------------------------------------------------------------
+    def _on_writer_error(self, msg):
+        logger.error(f"Writer error: {msg}")
+        QMessageBox.critical(self, "Writer Error",
+                             f"File writer encountered an error:\n{msg}")
+        self.lbl_writer_status.setText(f"Writer: ERROR — {msg}")
+        self.lbl_writer_status.setStyleSheet("color: red;")
+
+    def _on_queue_warning(self, qsize):
+        logger.warning(f"Writer queue at {qsize}/{WRITER_QUEUE_MAXSIZE}")
+        self.lbl_writer_status.setText(
+            f"Writer: ⚠ queue {qsize}/{WRITER_QUEUE_MAXSIZE}")
+        self.lbl_writer_status.setStyleSheet("color: orange;")
+
+    def _on_session_saved(self, folder_path):
+        self.lbl_writer_status.setText("Writer: idle")
+        self.lbl_writer_status.setStyleSheet("")
+
+    def _on_rows_written(self, eit, imu, markers):
+        self.lbl_writer_status.setText(
+            f"Writer: EIT={eit} IMU={imu} M={markers}")
+
+    # ------------------------------------------------------------------
+    # Participant database
+    # ------------------------------------------------------------------
+    def _open_participant_dialog(self):
+        dialog = ParticipantDialog(self._participant_db, self)
+        dialog.participant_selected.connect(self._on_participant_selected)
+        dialog.session_resumed.connect(self._on_session_resume_requested)
+        dialog.exec()
+
+    def _on_participant_selected(self, p_id, name, visit):
+        self.part_input.setText(p_id)
+        self.visit_input.setText(visit)
+        self.statusBar().showMessage(f"Participant: {p_id} — {name}")
+
+    def _on_session_resume_requested(self, folder_name):
+        folder_path = os.path.join(self.base_dir, folder_name)
+        try:
+            info = resume_session(folder_path)
+            self._session_info = info
+            self.part_input.setText(info.participant)
+            self.date_input.setText(info.date_str)
+            self.visit_input.setText(info.visit)
+            self.statusBar().showMessage(
+                f"Session resumed: {info.session_id}")
+
+            # Determine IMU columns from existing file
+            if self._imu_field_count == IMU_FIELD_COUNT_SHORT:
+                imu_cols = IMU_CSV_COLUMNS_SHORT
+            else:
+                imu_cols = IMU_CSV_COLUMNS_FULL
+
+            self._writer_queue = queue.Queue(maxsize=WRITER_QUEUE_MAXSIZE)
+            self._writer_thread = FileWriterThread(
+                self._writer_queue,
+                info.eit_path, info.imu_path, info.marker_path,
+                imu_columns=imu_cols)
+            self._writer_thread.writer_error.connect(self._on_writer_error)
+            self._writer_thread.queue_warning.connect(self._on_queue_warning)
+            self._writer_thread.session_saved.connect(self._on_session_saved)
+            self._writer_thread.rows_written.connect(self._on_rows_written)
+            self._writer_thread.start()
+
+            self.btn_save.setEnabled(True)
+
+        except ValueError as e:
+            QMessageBox.warning(self, "Resume Error", str(e))
 
     # ------------------------------------------------------------------
     # OTBioLab+ integration
     # ------------------------------------------------------------------
     def _try_otbiolab_record(self):
-        """Attempt to start recording in OTBioLab+ using image matching.
-
-        Looks for the OTBioLab+ window, locates the Record button via a
-        reference screenshot, and clicks it.  If the Record button is
-        greyed out (not found), it first clicks the Play button, waits,
-        then retries Record.
-
-        Requires reference screenshots placed in the ``otbiolab_assets/``
-        folder alongside this script:
-        - ``record_button.png``  — screenshot of the Record button
-        - ``play_button.png``    — screenshot of the Play button
-        """
         if pyautogui is None or gw is None:
             self.statusBar().showMessage(
                 "⚠ pyautogui/pygetwindow not installed — "
@@ -798,7 +935,6 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            # Find OTBioLab+ window
             otb_windows = gw.getWindowsWithTitle("OTBioLab+")
             if not otb_windows:
                 self.statusBar().showMessage(
@@ -809,16 +945,13 @@ class MainWindow(QMainWindow):
             otb_win.activate()
             time.sleep(0.5)
 
-            # Try to find the Record button
             record_loc = self._locate_image(record_img)
 
             if record_loc is None and os.path.exists(play_img):
-                # Record might be greyed out — press Play first
                 play_loc = self._locate_image(play_img)
                 if play_loc:
                     pyautogui.click(pyautogui.center(play_loc))
                     time.sleep(1.0)
-                    # Retry Record
                     record_loc = self._locate_image(record_img)
 
             if record_loc:
@@ -830,7 +963,6 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage(
                     "⚠ Could not locate Record button in OTBioLab+")
 
-            # Return focus to our window
             self.activateWindow()
             self.raise_()
 
@@ -842,14 +974,11 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _locate_image(img_path):
-        """Locate an image on screen, with graceful opencv fallback."""
         if pyautogui is None or not os.path.exists(img_path):
             return None
         try:
-            # confidence param requires opencv-python
             return pyautogui.locateOnScreen(img_path, confidence=0.8)
         except (NotImplementedError, TypeError):
-            # opencv not installed — fall back to exact pixel matching
             try:
                 return pyautogui.locateOnScreen(img_path)
             except Exception:
@@ -861,91 +990,91 @@ class MainWindow(QMainWindow):
     # Keyboard markers
     # ------------------------------------------------------------------
     def keyPressEvent(self, event):
+        # Guard against auto-repeat
+        if event.isAutoRepeat():
+            super().keyPressEvent(event)
+            return
+
         key = event.text().lower()
         if key in MARKER_KEYS and self.is_recording:
+            # Deduplication
+            now_ms = time.time() * 1000
+            last = self._last_marker_times.get(key, 0)
+            if now_ms - last < MARKER_DEDUP_INTERVAL_MS:
+                super().keyPressEvent(event)
+                return
+            self._last_marker_times[key] = now_ms
+
             wall_ts = datetime.datetime.now().isoformat()
             epoch_ts = time.time()
             event_name = MARKER_KEYS[key]
-            self.markers.append([
-                wall_ts, epoch_ts,
-                self.last_hardware_timestamp, key, event_name
-            ])
-            self.statusBar().showMessage(f"✓ Marker: {event_name}")
+            hw_ts = self.last_hardware_timestamp
+
+            # Enqueue to writer immediately
+            if self._writer_queue is not None:
+                marker_row = [wall_ts, epoch_ts, hw_ts, key, event_name]
+                try:
+                    self._writer_queue.put_nowait((TAG_MARKER, marker_row))
+                except queue.Full:
+                    logger.warning("Writer queue full — marker dropped!")
+
+            # Visual feedback on EIT plots
+            t = float(hw_ts) / 1_000_000.0 if hw_ts != "0" else 0.0
+            color = MARKER_COLORS.get(key, '#FFFFFF')
+            self.plot_eit1.add_marker(t, key, event_name, color)
+            self.plot_eit2.add_marker(t, key, event_name, color)
+
+            # Recent markers log
+            self._recent_markers.append(
+                f"[{key.upper()}] {event_name} @ {wall_ts[-12:]}")
+            if len(self._recent_markers) > MARKER_RECENT_LOG_SIZE:
+                self._recent_markers.pop(0)
+            self.lbl_recent_markers.setText(
+                "Recent markers: " + " | ".join(self._recent_markers))
+
+            # Status bar confirmation
+            self.statusBar().showMessage(
+                f"✓ Marker recorded: [{key.upper()}] {event_name}")
+
         super().keyPressEvent(event)
 
     # ------------------------------------------------------------------
-    # Save
+    # Save & Stop
     # ------------------------------------------------------------------
     def save_data(self):
         if self.is_recording:
-            self.toggle_recording()
+            self.is_recording = False
+            self.btn_record.setText("Record")
 
-        participant = self.part_input.text().strip()
-        date_str = self.date_input.text().strip()
-        visit = self.visit_input.text().strip()
+        if self._writer_queue is not None and self._writer_thread is not None:
+            # Signal shutdown and wait for drain
+            try:
+                self._writer_queue.put(
+                    (TAG_SHUTDOWN, None), timeout=WRITER_SHUTDOWN_TIMEOUT_S)
+            except queue.Full:
+                logger.error("Could not send shutdown to writer — queue full")
 
-        if not participant or not date_str or not visit:
-            QMessageBox.warning(
-                self, "Error",
-                "Please fill in Participant, Date, and Visit.")
-            return
+            self._writer_thread.wait(
+                int(WRITER_SHUTDOWN_TIMEOUT_S * 1000))
 
-        # Build prefix with time-of-day to avoid same-day overwrites
-        time_prefix = (self._session_time_prefix
-                       or datetime.datetime.now().strftime("%H%M%S"))
-        prefix = f"{participant}_{date_str}_{visit}_T{time_prefix}"
-        target_dir = os.path.join(self.base_dir, prefix)
-        os.makedirs(target_dir, exist_ok=True)
-
-        saved = []
-
-        if self.eit_data:
-            df = pd.DataFrame(
-                self.eit_data,
-                columns=['timestamp_us', 'wall_timestamp',
-                         'mag1', 'mag2'])
-            path = os.path.join(target_dir, f"{prefix}_EIT.csv")
-            df.to_csv(path, index=False)
-            saved.append(f"EIT ({len(self.eit_data)} rows)")
-
-        if self.imu_data:
-            df = pd.DataFrame(
-                self.imu_data,
-                columns=['timestamp_us', 'wall_timestamp',
-                         'rx_yaw', 'ry_roll', 'rz_pitch',
-                         'ax', 'ay', 'az'])
-            path = os.path.join(target_dir, f"{prefix}_IMU.csv")
-            df.to_csv(path, index=False)
-            saved.append(f"IMU ({len(self.imu_data)} rows)")
-
-        if self.markers:
-            df = pd.DataFrame(
-                self.markers,
-                columns=['wall_timestamp', 'wall_timestamp_epoch',
-                         'hardware_timestamp_us', 'key', 'event'])
-            path = os.path.join(target_dir, f"{prefix}_markers.csv")
-            df.to_csv(path, index=False)
-            saved.append(f"Markers ({len(self.markers)} rows)")
-
-        if saved:
+            folder = self._session_info.folder_path if self._session_info else "unknown"
             QMessageBox.information(
-                self, "Success",
-                f"Saved to:\n{target_dir}\n\n" + "\n".join(saved))
-        else:
-            QMessageBox.warning(
-                self, "Nothing to save", "No data was recorded.")
+                self, "Session Saved",
+                f"Data saved to:\n{folder}")
 
-        self.eit_data.clear()
-        self.imu_data.clear()
-        self.markers.clear()
-        self._session_time_prefix = None  # Reset for next session
+            self._writer_thread = None
+            self._writer_queue = None
+
+        self._session_info = None
+        self._session_time_prefix = None
         self.btn_save.setEnabled(False)
+        self.lbl_writer_status.setText("Writer: idle")
 
     # ------------------------------------------------------------------
     # Close confirmation
     # ------------------------------------------------------------------
     def closeEvent(self, event):
-        has_unsaved = bool(self.eit_data or self.imu_data or self.markers)
+        has_active_session = self._writer_thread is not None
 
         msg_box = QMessageBox(self)
         msg_box.setWindowTitle("Confirm Exit")
@@ -953,23 +1082,40 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         msg_box.setDefaultButton(QMessageBox.StandardButton.No)
 
-        if has_unsaved:
+        if has_active_session:
             msg_box.setIcon(QMessageBox.Icon.Warning)
-            msg_box.setText("You have UNSAVED recorded data!")
+            msg_box.setText("An active recording session exists!")
             msg_box.setInformativeText(
-                "Are you sure you want to close? "
-                "All unsaved data will be lost.")
+                "Data has been continuously saved to disk. "
+                "Closing will flush and finalize the session files.\n\n"
+                "Close the application?")
         else:
             msg_box.setIcon(QMessageBox.Icon.Question)
             msg_box.setText(
                 "Are you sure you want to close the application?")
 
         if msg_box.exec() == QMessageBox.StandardButton.Yes:
+            # Flush writer if active
+            if self._writer_queue is not None and self._writer_thread is not None:
+                try:
+                    self._writer_queue.put_nowait((TAG_SHUTDOWN, None))
+                except queue.Full:
+                    pass
+                self._writer_thread.wait(
+                    int(WRITER_SHUTDOWN_TIMEOUT_S * 1000))
+
             # Clean up timers and serial
             if self._reconnect_timer.isActive():
                 self._reconnect_timer.stop()
             if self.serial_worker and self.serial_worker.is_running:
                 self.serial_worker.stop()
+
+            # Close participant DB
+            try:
+                self._participant_db.close()
+            except Exception:
+                pass
+
             event.accept()
         else:
             event.ignore()

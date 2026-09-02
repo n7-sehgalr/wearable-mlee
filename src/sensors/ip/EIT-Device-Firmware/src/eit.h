@@ -71,16 +71,29 @@ void sample_and_send_data()
     // for BNO055, primary data is orientation, cannot get acceleration from here
     bno.getEvent(&event); 
     imu::Vector<3> linearAccel = bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
+    imu::Vector<3> gyro = bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);     // rad/s
+    imu::Vector<3> gravity = bno.getVector(Adafruit_BNO055::VECTOR_GRAVITY);    // m/s²
+    imu::Quaternion quat = bno.getQuat();                                        // unit quaternion
 
     // --- Combine and Send Data as CSV ---
-    // Format: timestamp_us,orient_x,orient_y,orient_z,accel_x,accel_y,accel_z
+    // Format: timestamp_us,orient_x,orient_y,orient_z,accel_x,accel_y,accel_z,gx,gy,gz,gravx,gravy,gravz,qw,qx,qy,qz
     Serial.print(currentTime); Serial.print(",");
     Serial.print(event.orientation.x, 4); Serial.print(","); // Heading/Yaw
     Serial.print(event.orientation.y, 4); Serial.print(","); // Roll
     Serial.print(event.orientation.z, 4); Serial.print(","); // Pitch
     Serial.print(linearAccel.x(), 4); Serial.print(",");
     Serial.print(linearAccel.y(), 4); Serial.print(",");
-    Serial.print(linearAccel.z(), 4);
+    Serial.print(linearAccel.z(), 4); Serial.print(",");
+    Serial.print(gyro.x(), 4); Serial.print(",");
+    Serial.print(gyro.y(), 4); Serial.print(",");
+    Serial.print(gyro.z(), 4); Serial.print(",");
+    Serial.print(gravity.x(), 4); Serial.print(",");
+    Serial.print(gravity.y(), 4); Serial.print(",");
+    Serial.print(gravity.z(), 4); Serial.print(",");
+    Serial.print(quat.w(), 4); Serial.print(",");
+    Serial.print(quat.x(), 4); Serial.print(",");
+    Serial.print(quat.y(), 4); Serial.print(",");
+    Serial.print(quat.z(), 4);
     Serial.println();
     
     // --- Periodic Calibration Status ---
