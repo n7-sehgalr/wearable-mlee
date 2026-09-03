@@ -135,5 +135,5 @@ PARTICIPANT_DB_FILENAME = "participants.db"
 # ======================================================================
 EIT_FIELD_COUNT = 3                    # timestamp, mag1, mag2
 IMU_FIELD_COUNT_SHORT = 7              # timestamp + 6 vals (old firmware)
-IMU_FIELD_COUNT_FULL = 16              # timestamp + 15 vals (new firmware)
+IMU_FIELD_COUNT_FULL = 17              # timestamp + 16 vals (new firmware)
 COMBINED_FIELD_COUNT_OLD = 9           # legacy combined format

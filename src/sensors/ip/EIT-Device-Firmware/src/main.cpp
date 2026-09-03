@@ -163,15 +163,6 @@ void setup()
         delay(1000); // Wait for sensor to stabilize
         bno.setExtCrystalUse(true); // Use external crystal for better stability
 
-        if (EEPROM.read(0) == 0xAB) {
-            adafruit_bno055_offsets_t offsets;
-            EEPROM.get(1, offsets);
-            bno.setSensorOffsets(offsets);
-            LOG("# CALIBRATION: Loaded from EEPROM\r\n");
-        } else {
-            LOG("# CALIBRATION: No saved data, manual calibration needed\r\n");
-        }
-
         bno.getCalibration(&system_cal, &gyro_cal, &accel_cal, &mag_cal); // Get initial calibration
     }
 

@@ -10,6 +10,7 @@ import time
 import datetime
 import collections
 import queue
+import json
 import logging
 import traceback
 
@@ -488,6 +489,25 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(clean_line)
             return
 
+        if clean_line.startswith("# CALIB_OFFSETS:"):
+            offsets = clean_line.replace("# CALIB_OFFSETS:", "").strip()
+            calib_file = os.path.join(os.path.dirname(__file__), "calibration.json")
+            with open(calib_file, "w") as f:
+                json.dump({"offsets": offsets}, f)
+            return
+            
+        if clean_line.startswith("# CALIBRATION_LOAD_REQUEST"):
+            calib_file = os.path.join(os.path.dirname(__file__), "calibration.json")
+            try:
+                with open(calib_file, "r") as f:
+                    data = json.load(f)
+                    offsets = data.get("offsets", "")
+                    if offsets:
+                        self.serial_worker.send_command(f"calibrate set {offsets}")
+            except (FileNotFoundError, json.JSONDecodeError):
+                pass
+            return
+
         if clean_line.startswith("# CALIBRATION SAVED"):
             self.statusBar().showMessage("✓ Calibration saved to EEPROM")
             return
@@ -666,6 +686,9 @@ class MainWindow(QMainWindow):
                 lambda: self.serial_worker.send_command("calibrate save"))
             self.calib_dialog.load_requested.connect(
                 lambda: self.serial_worker.send_command("calibrate load"))
+                
+            # Request calibration load on connection
+            QTimer.singleShot(500, lambda: self.serial_worker.send_command("calibrate load"))
         else:
             self.serial_worker.stop()
             self.serial_worker = None

@@ -247,28 +247,51 @@ bool getCalOffsets(String const & match_to)
 bool calibrateCommand(String const & command, String const & arguments) 
 {
     if (command != "calibrate") return false;
+    
     if (arguments == "save") {
         uint8_t sys, gyro, accel, mag;
         bno.getCalibration(&sys, &gyro, &accel, &mag);
         if (sys == 3 && gyro == 3 && accel == 3 && mag == 3) {
             adafruit_bno055_offsets_t offsets;
             bno.getSensorOffsets(offsets);
-            EEPROM.write(0, 0xAB);
-            EEPROM.put(1, offsets);
+            SL(); LOG("# CALIB_OFFSETS:");
+            LOG(offsets.accel_offset_x); LOG(","); LOG(offsets.accel_offset_y); LOG(","); LOG(offsets.accel_offset_z); LOG(",");
+            LOG(offsets.gyro_offset_x); LOG(","); LOG(offsets.gyro_offset_y); LOG(","); LOG(offsets.gyro_offset_z); LOG(",");
+            LOG(offsets.mag_offset_x); LOG(","); LOG(offsets.mag_offset_y); LOG(","); LOG(offsets.mag_offset_z); LOG(",");
+            LOG(offsets.accel_radius); LOG(","); LOG(offsets.mag_radius); LOG("\r\n");
             SL(); LOG("# CALIBRATION SAVED\r\n");
         } else {
             SL(); LOG("# CALIBRATION FAILED: All subsystems must be at level 3\r\n");
         }
         return true;
-    } else if (arguments == "load") {
-        if (EEPROM.read(0) == 0xAB) {
-            adafruit_bno055_offsets_t offsets;
-            EEPROM.get(1, offsets);
-            bno.setSensorOffsets(offsets);
-            SL(); LOG("# CALIBRATION LOADED\r\n");
-        } else {
-            SL(); LOG("# NO SAVED CALIBRATION\r\n");
+    } else if (arguments.startsWith("set ")) {
+        // e.g. calibrate set 1,2,3,4,5,6,7,8,9,10,11
+        String data = arguments.substring(4);
+        adafruit_bno055_offsets_t offsets;
+        
+        // Very basic parsing for 11 comma-separated values
+        int pos = 0;
+        int nextPos;
+        int16_t vals[11] = {0};
+        for (int i=0; i<11; i++) {
+            nextPos = data.indexOf(',', pos);
+            if (nextPos == -1 && i < 10) return true; // Parse error
+            vals[i] = data.substring(pos, nextPos == -1 ? data.length() : nextPos).toInt();
+            pos = nextPos + 1;
         }
+        
+        offsets.accel_offset_x = vals[0]; offsets.accel_offset_y = vals[1]; offsets.accel_offset_z = vals[2];
+        offsets.gyro_offset_x = vals[3];  offsets.gyro_offset_y = vals[4];  offsets.gyro_offset_z = vals[5];
+        offsets.mag_offset_x = vals[6];   offsets.mag_offset_y = vals[7];   offsets.mag_offset_z = vals[8];
+        offsets.accel_radius = vals[9];   offsets.mag_radius = vals[10];
+        
+        bno.setSensorOffsets(offsets);
+        SL(); LOG("# CALIBRATION LOADED\r\n");
+        return true;
+    } else if (arguments == "load") {
+        // The desktop app handles 'load' by sending 'calibrate set ...'
+        // We just print a request
+        SL(); LOG("# CALIBRATION_LOAD_REQUEST\r\n");
         return true;
     }
     return false;
