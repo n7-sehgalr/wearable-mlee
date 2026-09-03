@@ -158,6 +158,7 @@ void setup()
       LOG("Oops, no BNO055 detected ... Check your wiring or I2C ADDR!\r\n");
     }
     else {
+        Wire2.setClock(400000); // 400kHz I2C for fast IMU reads
         LOG("BNO055 detected successfully!\r\n");
         delay(1000); // Wait for sensor to stabilize
         bno.setExtCrystalUse(true); // Use external crystal for better stability

@@ -130,8 +130,9 @@ def test_writer_emits_rows_written_signal(tmp_path):
     
     writer = FileWriterThread(q, eit_path, imu_path, marker_path)
     
+    from PyQt6.QtCore import Qt
     mock_slot = MagicMock()
-    writer.rows_written.connect(mock_slot)
+    writer.rows_written.connect(mock_slot, Qt.ConnectionType.DirectConnection)
     
     q.put((TAG_EIT, [1, '10:00:00', 1.0, 2.0]))
     q.put((TAG_IMU, [1, '10:00:00'] + [0]*14))

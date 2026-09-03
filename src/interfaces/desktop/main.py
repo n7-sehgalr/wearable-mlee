@@ -1,5 +1,11 @@
 import sys
 import os
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__),'..','..','..')))
+
+# Ensure the project root is in sys.path so absolute imports work when run directly
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..')))
+
 import time
 import datetime
 import collections
@@ -32,7 +38,7 @@ try:
 except ImportError:
     gw = None
 
-from .constants import (
+from src.interfaces.desktop.constants import (
     MARKER_KEYS, MARKER_COLORS,
     TAG_EIT, TAG_IMU, TAG_MARKER, TAG_SHUTDOWN,
     EIT_CSV_COLUMNS, IMU_CSV_COLUMNS_SHORT, IMU_CSV_COLUMNS_FULL,
@@ -50,12 +56,12 @@ from .constants import (
     SESSION_TIME_FORMAT, SESSION_DATE_FORMAT,
     DEFAULT_DATA_DIR, PARTICIPANT_DB_FILENAME,
 )
-from .plotter import DataPlotter
-from .writer import FileWriterThread
-from .session import SessionInfo, create_session, resume_session
-from .participant_db import ParticipantDB
-from .participant_dialog import ParticipantDialog
-from .calibration import StaticCalibrationDialog
+from src.interfaces.desktop.plotter import DataPlotter
+from src.interfaces.desktop.writer import FileWriterThread
+from src.interfaces.desktop.session import SessionInfo, create_session, resume_session
+from src.interfaces.desktop.participant_db import ParticipantDB
+from src.interfaces.desktop.participant_dialog import ParticipantDialog
+from src.interfaces.desktop.calibration import StaticCalibrationDialog
 
 # ======================================================================
 # Configure logging
@@ -107,18 +113,32 @@ class SerialWorker(QThread):
                 self.port, self.baudrate, timeout=SERIAL_READ_TIMEOUT
             )
             self.is_running = True
+            buffer = bytearray()
+            
             while self.is_running:
                 try:
-                    if self.serial_conn.in_waiting > 0:
-                        raw = self.serial_conn.readline()
-                        wall_ts = datetime.datetime.now().isoformat()
-                        try:
-                            line = raw.decode('utf-8', errors='replace').strip()
-                        except Exception:
-                            continue
-                        if line:
-                            with QMutexLocker(self._lock):
-                                self._line_queue.append((wall_ts, line))
+                    waiting = self.serial_conn.in_waiting
+                    if waiting > 0:
+                        chunk = self.serial_conn.read(waiting)
+                        buffer.extend(chunk)
+                        
+                        if b'\n' in buffer:
+                            lines_raw = buffer.split(b'\n')
+                            buffer = bytearray(lines_raw.pop()) # keep remainder
+                            
+                            wall_ts = datetime.datetime.now().isoformat()
+                            new_lines = []
+                            for raw in lines_raw:
+                                try:
+                                    line = raw.decode('utf-8', errors='replace').strip()
+                                    if line:
+                                        new_lines.append((wall_ts, line))
+                                except Exception:
+                                    pass
+                                    
+                            if new_lines:
+                                with QMutexLocker(self._lock):
+                                    self._line_queue.extend(new_lines)
                     else:
                         self.msleep(1)
                 except serial.SerialException:
@@ -274,6 +294,12 @@ class MainWindow(QMainWindow):
         self.btn_participants.clicked.connect(self._open_participant_dialog)
         self.btn_participants.setToolTip("Open participant database")
         control_layout.addWidget(self.btn_participants, 2, 2)
+        
+        self.btn_calibrate = QPushButton("Calibrate IMU")
+        self.btn_calibrate.clicked.connect(self._show_calib_dialog)
+        self.btn_calibrate.setToolTip("Open IMU Calibration Dialog")
+        self.btn_calibrate.setEnabled(False) # Enabled when connected
+        control_layout.addWidget(self.btn_calibrate, 2, 3)
 
         self.btn_reconnect = QPushButton("⟳ Reconnect Now")
         self.btn_reconnect.clicked.connect(self._manual_reconnect)
@@ -381,27 +407,36 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             "Ready — Close Arduino IDE Serial Monitor before connecting")
 
-    # ------------------------------------------------------------------
-    # Render tick — called at ~30 fps
-    # ------------------------------------------------------------------
     def _render_tick(self):
         """Drain the serial queue, parse every line, then redraw plots once."""
         if self.serial_worker is None or not self.serial_worker.is_running:
             return
 
         items = self.serial_worker.drain_lines()
+        if not items:
+            return
 
-        # Bound how many items we process per tick to keep GUI responsive
-        MAX_ITEMS_PER_TICK = 200
-        for wall_ts, line in items[:MAX_ITEMS_PER_TICK]:
+        # Prepare batches
+        self._batch_eit_times = []
+        self._batch_eit_mag1 = []
+        self._batch_eit_mag2 = []
+        
+        self._batch_imu_times = []
+        self._batch_imu_accel = []
+        self._batch_imu_orient = []
+
+        # Parse all items to populate batches and writer queue
+        for wall_ts, line in items:
             self._parse_line(line, wall_ts)
 
-        # If we couldn't process everything, remaining items were already
-        # drained from the serial deque — they must still go to the writer.
-        # Enqueue them directly without display processing.
-        if len(items) > MAX_ITEMS_PER_TICK:
-            for wall_ts, line in items[MAX_ITEMS_PER_TICK:]:
-                self._parse_line_write_only(line, wall_ts)
+        # Batch append to plots
+        if self._batch_eit_times:
+            self.plot_eit1.append_samples(self._batch_eit_times, [[v] for v in self._batch_eit_mag1])
+            self.plot_eit2.append_samples(self._batch_eit_times, [[v] for v in self._batch_eit_mag2])
+            
+        if self._batch_imu_times:
+            self.plot_imu_accel.append_samples(self._batch_imu_times, self._batch_imu_accel)
+            self.plot_imu_orient.append_samples(self._batch_imu_times, self._batch_imu_orient)
 
         # Single batch-redraw of all four plots
         self.plot_eit1.redraw()
@@ -432,6 +467,13 @@ class MainWindow(QMainWindow):
                 try:
                     s, g, a, m = int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3])
                     self.lbl_calib_status.setText(f"Calib[Sys:{s} G:{g} A:{a} M:{m}]")
+                    
+                    # Auto-prompt calibration dialog on first connection if not calibrated
+                    if not getattr(self, '_calib_prompted', False):
+                        self._calib_prompted = True
+                        if s < 3:
+                            self._show_calib_dialog()
+
                     if self.calib_dialog and self.calib_dialog.isVisible():
                         self.calib_dialog.update_calib(s, g, a, m)
                 except ValueError:
@@ -477,8 +519,10 @@ class MainWindow(QMainWindow):
             self.eit_packet_count += 1
             self.last_hardware_timestamp = parts[0].strip()
             t = ts / 1_000_000.0
-            self.plot_eit1.append_sample(t, [mag1])
-            self.plot_eit2.append_sample(t, [mag2])
+            
+            self._batch_eit_times.append(t)
+            self._batch_eit_mag1.append(mag1)
+            self._batch_eit_mag2.append(mag2)
 
             if self.is_recording and self._writer_queue is not None:
                 row = [parts[0].strip(), wall_ts,
@@ -513,9 +557,9 @@ class MainWindow(QMainWindow):
                 vals[0] = self.last_yaw + diff
             self.last_yaw = vals[0]
 
-            # vals[0:3] = orientation, vals[3:6] = linear accel
-            self.plot_imu_orient.append_sample(t, vals[0:3])
-            self.plot_imu_accel.append_sample(t, vals[3:6])
+            self._batch_imu_times.append(t)
+            self._batch_imu_orient.append(vals[0:3])
+            self._batch_imu_accel.append(vals[3:6])
 
             if self.is_recording and self._writer_queue is not None:
                 row = [parts[0].strip(), wall_ts] + [p.strip() for p in parts[1:]]
@@ -551,10 +595,12 @@ class MainWindow(QMainWindow):
                 vals[0] = self.last_yaw + diff
             self.last_yaw = vals[0]
 
-            self.plot_eit1.append_sample(t, [mag1])
-            self.plot_eit2.append_sample(t, [mag2])
-            self.plot_imu_orient.append_sample(t, vals[0:3])
-            self.plot_imu_accel.append_sample(t, vals[3:6])
+            self._batch_eit_times.append(t)
+            self._batch_eit_mag1.append(mag1)
+            self._batch_eit_mag2.append(mag2)
+            self._batch_imu_times.append(t)
+            self._batch_imu_orient.append(vals[0:3])
+            self._batch_imu_accel.append(vals[3:6])
 
             if self.is_recording and self._writer_queue is not None:
                 eit_row = [parts[0].strip(), wall_ts,
@@ -567,51 +613,6 @@ class MainWindow(QMainWindow):
                     logger.warning("Writer queue full — combined row dropped")
         else:
             self.skipped_line_count += 1
-
-    # ------------------------------------------------------------------
-    def _parse_line_write_only(self, line, wall_ts):
-        """Parse a line and enqueue to writer only (no display update).
-
-        Used when the GUI render tick has too many items to process.
-        """
-        if not self.is_recording or self._writer_queue is None:
-            return
-
-        clean_line = line.strip('\x00\r\n\t ')
-        if not clean_line or clean_line[0] == '#':
-            return
-
-        parts = clean_line.split(',')
-        nfields = len(parts)
-
-        try:
-            if nfields == EIT_FIELD_COUNT:
-                float(parts[0])  # validate
-                row = [parts[0].strip(), wall_ts,
-                       parts[1].strip(), parts[2].strip()]
-                self._writer_queue.put_nowait((TAG_EIT, row))
-                self.eit_packet_count += 1
-                self.last_hardware_timestamp = parts[0].strip()
-
-            elif nfields in (IMU_FIELD_COUNT_SHORT, IMU_FIELD_COUNT_FULL):
-                float(parts[0])
-                row = [parts[0].strip(), wall_ts] + [p.strip() for p in parts[1:]]
-                self._writer_queue.put_nowait((TAG_IMU, row))
-                self.imu_packet_count += 1
-                self.last_hardware_timestamp = parts[0].strip()
-
-            elif nfields == COMBINED_FIELD_COUNT_OLD:
-                float(parts[0])
-                eit_row = [parts[0].strip(), wall_ts,
-                           parts[1].strip(), parts[2].strip()]
-                imu_row = [parts[0].strip(), wall_ts] + [p.strip() for p in parts[3:]]
-                self._writer_queue.put_nowait((TAG_EIT, eit_row))
-                self._writer_queue.put_nowait((TAG_IMU, imu_row))
-                self.eit_packet_count += 1
-                self.imu_packet_count += 1
-                self.last_hardware_timestamp = parts[0].strip()
-        except (ValueError, queue.Full):
-            pass
 
     # ------------------------------------------------------------------
     # Connection management
@@ -644,6 +645,7 @@ class MainWindow(QMainWindow):
             self.eit_packet_count = 0
             self.imu_packet_count = 0
             self.skipped_line_count = 0
+            self._calib_prompted = False
 
             self.serial_worker = SerialWorker(port)
             self.serial_worker.error_occurred.connect(
@@ -654,22 +656,32 @@ class MainWindow(QMainWindow):
 
             self.btn_connect.setText("Disconnect")
             self.btn_record.setEnabled(True)
+            self.btn_calibrate.setEnabled(True)
             self.statusBar().showMessage(f"Connected to {port}")
             self.setFocus()
 
-            # Show calibration dialog
+            # Create calibration dialog (hidden by default)
             self.calib_dialog = StaticCalibrationDialog(self)
             self.calib_dialog.save_requested.connect(
                 lambda: self.serial_worker.send_command("calibrate save"))
             self.calib_dialog.load_requested.connect(
                 lambda: self.serial_worker.send_command("calibrate load"))
-            self.calib_dialog.show()
         else:
             self.serial_worker.stop()
             self.serial_worker = None
             self.btn_connect.setText("Connect")
             self.btn_record.setEnabled(False)
+            self.btn_calibrate.setEnabled(False)
+            if self.calib_dialog:
+                self.calib_dialog.close()
+                self.calib_dialog = None
             self.statusBar().showMessage("Disconnected")
+
+    def _show_calib_dialog(self):
+        if self.calib_dialog:
+            self.calib_dialog.show()
+            self.calib_dialog.raise_()
+            self.calib_dialog.activateWindow()
 
     def toggle_recording(self):
         if not self.is_recording:

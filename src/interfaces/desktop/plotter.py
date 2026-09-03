@@ -2,13 +2,13 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import Qt
 
-from .constants import (
+from src.interfaces.desktop.constants import (
     EIT_SMOOTHING_METHOD, EIT_EMA_CUTOFF_HZ, EIT_MA_WINDOW_SAMPLES,
     EIT_DISPLAY_MAX_POINTS, EIT_AUTOSCALE_PADDING, EIT_AUTOSCALE_MIN_RANGE,
     EIT_AUTOSCALE_HYSTERESIS, EIT_RAW_CURVE_ALPHA,
     MARKER_COLORS, MARKER_MAX_VISIBLE_ANNOTATIONS,
 )
-from .filters import StreamingEMA, StreamingMA, compute_autoscale_range
+from src.interfaces.desktop.filters import StreamingEMA, StreamingMA, compute_autoscale_range
 
 class DataPlotter(pg.PlotWidget):
     """Real-time scrolling plot with optional smoothing and marker annotations.
@@ -77,22 +77,36 @@ class DataPlotter(pg.PlotWidget):
         self.enableAutoRange(axis='y', enable=False)
         
     def append_sample(self, t: float, values: list[float]):
-        """Append one sample. t is time in seconds from hardware timestamp."""
-        self.time_buffer[:-1] = self.time_buffer[1:]
-        self.time_buffer[-1] = t
+        self.append_samples([t], [values])
+        
+    def append_samples(self, times: list[float], values_list: list[list[float]]):
+        """Append multiple samples efficiently."""
+        n = len(times)
+        if n == 0:
+            return
+            
+        # If we are adding more points than the buffer holds, just take the last max_points
+        if n >= self.max_points:
+            times = times[-self.max_points:]
+            values_list = values_list[-self.max_points:]
+            n = self.max_points
+
+        # Shift arrays by n
+        self.time_buffer[:-n] = self.time_buffer[n:]
+        self.time_buffer[-n:] = times
         
         for i, label in enumerate(self.labels):
-            val = values[i]
-            self.data_buffers[label][:-1] = self.data_buffers[label][1:]
-            self.data_buffers[label][-1] = val
+            vals = [v[i] for v in values_list]
+            self.data_buffers[label][:-n] = self.data_buffers[label][n:]
+            self.data_buffers[label][-n:] = vals
             
             if self.enable_smoothing:
-                filtered = self.filters[label].update(val)
-                self.smoothed_buffers[label][:-1] = self.smoothed_buffers[label][1:]
-                self.smoothed_buffers[label][-1] = filtered
+                # Update filter for each value
+                filtered = [self.filters[label].update(v) for v in vals]
+                self.smoothed_buffers[label][:-n] = self.smoothed_buffers[label][n:]
+                self.smoothed_buffers[label][-n:] = filtered
                 
-        if self.ptr < self.max_points:
-            self.ptr += 1
+        self.ptr = min(self.max_points, self.ptr + n)
         self._dirty = True
         
     def redraw(self):

@@ -5,7 +5,7 @@ import queue
 import logging
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from .constants import (
+from src.interfaces.desktop.constants import (
     TAG_EIT, TAG_IMU, TAG_MARKER, TAG_SHUTDOWN,
     EIT_CSV_COLUMNS, IMU_CSV_COLUMNS_SHORT, IMU_CSV_COLUMNS_FULL,
     MARKER_CSV_COLUMNS,

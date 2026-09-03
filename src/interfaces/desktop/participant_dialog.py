@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QMessageBox, QHeaderView, QAbstractItemView,
                              QComboBox)
 from PyQt6.QtCore import Qt, pyqtSignal
-from .participant_db import ParticipantDB
+from src.interfaces.desktop.participant_db import ParticipantDB
 
 class ParticipantDialog(QDialog):
     """Dialog for selecting or creating participants.
