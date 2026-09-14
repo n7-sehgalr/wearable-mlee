@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 from typing import List, Optional
 
-from src.interfaces.desktop.constants import (
+from src.app.constants import (
     EIT_CSV_COLUMNS,
     IMU_CSV_COLUMNS_SHORT,
     IMU_CSV_COLUMNS_FULL,

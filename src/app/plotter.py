@@ -2,14 +2,14 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import Qt
 
-from src.interfaces.desktop.constants import (
+from src.app.constants import (
     EIT_SMOOTHING_METHOD, EIT_EMA_CUTOFF_HZ, EIT_MA_WINDOW_SAMPLES,
     EIT_DISPLAY_MAX_POINTS, EIT_DISPLAY_WINDOW_SECONDS,
     EIT_AUTOSCALE_PADDING, EIT_AUTOSCALE_MIN_RANGE,
     EIT_AUTOSCALE_HYSTERESIS, EIT_RAW_CURVE_ALPHA,
     MARKER_COLORS, MARKER_MAX_VISIBLE_ANNOTATIONS,
 )
-from src.interfaces.desktop.filters import StreamingEMA, StreamingMA, compute_autoscale_range
+from src.app.filters import StreamingEMA, StreamingMA, compute_autoscale_range
 
 class DataPlotter(pg.PlotWidget):
     """Real-time scrolling plot with optional smoothing and marker annotations.

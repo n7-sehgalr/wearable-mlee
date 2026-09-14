@@ -1,12 +1,17 @@
+[build-system]
+requires = [
+    "setuptools",
+]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "wearable-mlee"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "ipykernel>=6.29",
-    "kedro>=1.5.0",
     "matplotlib>=3.10",
     "numpy>=2.2",
     "openpyxl>=3.1",
@@ -15,6 +20,65 @@ dependencies = [
     "pyqt6>=6.11.0",
     "pyqtgraph>=0.14.0",
     "pyserial>=3.5",
-    "pytest>=9.1.1",
     "scipy>=1.15",
+    "ipython>=8.10",
+    "jupyterlab>=3.0",
+    "notebook",
+    "kedro[jupyter]~=1.6.0",
+    "kedro-datasets[pandas-csvdataset, pandas-exceldataset, pandas-parquetdataset, plotly-plotlydataset, plotly-jsondataset, matplotlib-matplotlibdataset]>=3.0",
+    "kedro-viz>=6.7.0",
+    "scikit-learn~=1.5.1; python_version <= '3.10'",
+    "scikit-learn~=1.8.0; python_version > '3.10'",
+    "seaborn~=0.12.1",
+]
+
+[project.scripts]
+wearable-mlee = "wearable_mlee.__main__:main"
+
+[project.entry-points."kedro.hooks"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-cov>=3,<7",
+    "pytest-mock>=1.7.1, <2.0",
+    "ruff~=0.12.0",
+]
+
+[tool.setuptools.dynamic.version]
+attr = "wearable_mlee.__version__"
+
+[tool.setuptools.packages.find]
+where = [
+    "src",
+]
+namespaces = false
+
+[tool.kedro]
+package_name = "wearable_mlee"
+project_name = "wearable-mlee"
+kedro_init_version = "1.6.0"
+tools = "['Linting', 'Custom Logging', 'Data Structure']"
+example_pipeline = "True"
+source_dir = "src"
+
+[tool.ruff]
+line-length = 88
+show-fixes = true
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint]
+select = [
+    "F",
+    "W",
+    "E",
+    "I",
+    "UP",
+    "PL",
+    "T201",
+]
+ignore = [
+    "E501",
 ]

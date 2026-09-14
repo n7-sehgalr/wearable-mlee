@@ -4,7 +4,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__),'..','..','..')))
 
 # Ensure the project root is in sys.path so absolute imports work when run directly
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 import time
 import datetime
@@ -39,7 +39,7 @@ try:
 except ImportError:
     gw = None
 
-from src.interfaces.desktop.constants import (
+from src.app.constants import (
     MARKER_KEYS, MARKER_COLORS,
     TAG_EIT, TAG_IMU, TAG_MARKER, TAG_SHUTDOWN,
     EIT_CSV_COLUMNS, IMU_CSV_COLUMNS_SHORT, IMU_CSV_COLUMNS_FULL,
@@ -57,12 +57,12 @@ from src.interfaces.desktop.constants import (
     SESSION_TIME_FORMAT, SESSION_DATE_FORMAT,
     DEFAULT_DATA_DIR, PARTICIPANT_DB_FILENAME,
 )
-from src.interfaces.desktop.plotter import DataPlotter
-from src.interfaces.desktop.writer import FileWriterThread
-from src.interfaces.desktop.session import SessionInfo, create_session, resume_session
-from src.interfaces.desktop.participant_db import ParticipantDB
-from src.interfaces.desktop.participant_dialog import ParticipantDialog
-from src.interfaces.desktop.calibration import StaticCalibrationDialog
+from src.app.plotter import DataPlotter
+from src.app.writer import FileWriterThread
+from src.app.session import SessionInfo, create_session, resume_session
+from src.app.participant_db import ParticipantDB
+from src.app.participant_dialog import ParticipantDialog
+from src.app.calibration import StaticCalibrationDialog
 
 # ======================================================================
 # Configure logging
