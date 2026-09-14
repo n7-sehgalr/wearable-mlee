@@ -1,126 +1,81 @@
 import sqlite3
 import logging
-import datetime
-from typing import Optional, List, Dict, Any
+from typing import List, Tuple, Dict, Any
 
 logger = logging.getLogger(__name__)
 
+
 class ParticipantDB:
-    """Lightweight SQLite database for participant and session management."""
-    
     def __init__(self, db_path: str):
-        """Open or create the database at db_path."""
         self.db_path = db_path
-        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
-        self._enable_wal()
-        self.create_tables()
-        
-    def _enable_wal(self):
-        try:
-            self.conn.execute("PRAGMA journal_mode=WAL;")
-            self.conn.commit()
-        except sqlite3.Error as e:
-            logger.error(f"Failed to enable WAL mode: {e}")
+        self._init_db()
+
+    def _init_db(self):
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
             
-    def create_tables(self):
-        """Create tables if they don't exist."""
-        try:
-            with self.conn:
-                self.conn.execute('''
-                    CREATE TABLE IF NOT EXISTS participants (
-                        id TEXT PRIMARY KEY,
-                        name TEXT,
-                        notes TEXT,
-                        created_at TEXT
-                    )
-                ''')
-                
-                self.conn.execute('''
-                    CREATE TABLE IF NOT EXISTS sessions (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        participant_id TEXT NOT NULL,
-                        date TEXT NOT NULL,
-                        visit TEXT NOT NULL, 
-                        folder TEXT NOT NULL,
-                        created_at TEXT NOT NULL,
-                        FOREIGN KEY(participant_id) REFERENCES participants(id)
-                    )
-                ''')
-        except sqlite3.Error as e:
-            logger.error(f"Failed to create tables: {e}")
-            
-    def add_participant(self, participant_id: str, name: str = '', notes: str = '') -> None:
-        """Add a new participant. Raises if ID already exists."""
-        created_at = datetime.datetime.now().isoformat()
-        try:
-            with self.conn:
-                self.conn.execute(
-                    "INSERT INTO participants (id, name, notes, created_at) VALUES (?, ?, ?, ?)",
-                    (participant_id, name, notes, created_at)
+            # Simple participants table, just storing the padded number
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS participants (
+                    participant_num TEXT PRIMARY KEY
                 )
+            """)
+            
+            # Simple sessions table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    participant_num TEXT,
+                    visit TEXT,
+                    session_id TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (participant_num) REFERENCES participants (participant_num)
+                )
+            """)
+            conn.commit()
+
+    def add_participant(self, participant_num: str):
+        p_num = str(participant_num).zfill(2)
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT INTO participants (participant_num) VALUES (?)",
+                    (p_num,)
+                )
+                conn.commit()
+                return True
         except sqlite3.IntegrityError:
-            raise ValueError(f"Participant with ID {participant_id} already exists.")
+            return False
+
+    def get_participants(self) -> List[str]:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT participant_num FROM participants ORDER BY participant_num")
+            return [row[0] for row in cursor.fetchall()]
+
+    def add_session(self, participant_num: str, visit: str, session_id: str):
+        p_num = str(participant_num).zfill(2)
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            # Ensure participant exists
+            cursor.execute("INSERT OR IGNORE INTO participants (participant_num) VALUES (?)", (p_num,))
             
-    def get_participant(self, participant_id: str) -> Optional[Dict[str, Any]]:
-        """Get participant by ID. Returns dict with id, name, notes, created_at."""
-        cursor = self.conn.execute("SELECT * FROM participants WHERE id = ?", (participant_id,))
-        row = cursor.fetchone()
-        if row:
-            return dict(row)
-        return None
-        
-    def list_participants(self, search: str = '') -> List[Dict[str, Any]]:
-        """List all participants, optionally filtered by search string."""
-        if search:
-            cursor = self.conn.execute(
-                "SELECT * FROM participants WHERE id LIKE ? OR name LIKE ? ORDER BY created_at DESC",
-                (f"%{search}%", f"%{search}%")
-            )
-        else:
-            cursor = self.conn.execute("SELECT * FROM participants ORDER BY created_at DESC")
-        return [dict(row) for row in cursor.fetchall()]
-        
-    def update_participant(self, participant_id: str, name: Optional[str] = None, notes: Optional[str] = None) -> None:
-        """Update participant fields."""
-        updates = []
-        params = []
-        
-        if name is not None:
-            updates.append("name = ?")
-            params.append(name)
-            
-        if notes is not None:
-            updates.append("notes = ?")
-            params.append(notes)
-            
-        if not updates:
-            return
-            
-        params.append(participant_id)
-        
-        query = f"UPDATE participants SET {', '.join(updates)} WHERE id = ?"
-        with self.conn:
-            self.conn.execute(query, params)
-            
-    def add_session_record(self, participant_id: str, date: str, visit: str, folder: str) -> int:
-        """Record a session. Returns the session row id."""
-        created_at = datetime.datetime.now().isoformat()
-        with self.conn:
-            cursor = self.conn.execute(
-                "INSERT INTO sessions (participant_id, date, visit, folder, created_at) VALUES (?, ?, ?, ?, ?)",
-                (participant_id, date, visit, folder, created_at)
-            )
-            return cursor.lastrowid
-            
-    def get_sessions_for_participant(self, participant_id: str) -> List[Dict[str, Any]]:
-        """Get all sessions for a participant, most recent first."""
-        cursor = self.conn.execute(
-            "SELECT * FROM sessions WHERE participant_id = ? ORDER BY created_at DESC",
-            (participant_id,)
-        )
-        return [dict(row) for row in cursor.fetchall()]
-        
-    def close(self):
-        """Close the database connection."""
-        self.conn.close()
+            cursor.execute("""
+                INSERT INTO sessions (participant_num, visit, session_id)
+                VALUES (?, ?, ?)
+            """, (p_num, visit, session_id))
+            conn.commit()
+
+    def get_sessions(self, participant_num: str) -> List[Dict[str, Any]]:
+        p_num = str(participant_num).zfill(2)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, participant_num, visit, session_id, timestamp
+                FROM sessions
+                WHERE participant_num = ?
+                ORDER BY timestamp DESC
+            """, (p_num,))
+            return [dict(row) for row in cursor.fetchall()]

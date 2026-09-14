@@ -243,17 +243,16 @@ class MainWindow(QMainWindow):
         control_group = QGroupBox("Session Details")
         control_layout = QGridLayout()
 
-        self.part_input = QLineEdit("P01")
-        self.date_input = QLineEdit(
-            datetime.datetime.now().strftime(SESSION_DATE_FORMAT))
-        self.visit_input = QLineEdit("V1")
+        self.part_input = QLineEdit("01")
+        self.part_input.setPlaceholderText("01-45")
+        self.visit_combo = QComboBox()
+        self.visit_combo.addItems(["2", "3"])
 
-        control_layout.addWidget(QLabel("Participant ID:"), 0, 0)
+        control_layout.addWidget(QLabel("Participant Num:"), 0, 0)
         control_layout.addWidget(self.part_input, 0, 1)
-        control_layout.addWidget(QLabel("Date:"), 0, 2)
-        control_layout.addWidget(self.date_input, 0, 3)
-        control_layout.addWidget(QLabel("Visit:"), 0, 4)
-        control_layout.addWidget(self.visit_input, 0, 5)
+        control_layout.addWidget(QLabel("Visit:"), 0, 2)
+        control_layout.addWidget(self.visit_combo, 0, 3)
+        # Date will be auto-generated at recording time
 
         self.port_combo = QComboBox()
         self.refresh_ports()
@@ -731,34 +730,29 @@ class MainWindow(QMainWindow):
             # Start recording — create session and writer
             if self._session_info is None:
                 participant = self.part_input.text().strip()
-                date_str = self.date_input.text().strip()
-                visit = self.visit_input.text().strip()
+                visit = self.visit_combo.currentText()
 
-                if not participant or not date_str or not visit:
+                if not participant:
                     QMessageBox.warning(
                         self, "Error",
-                        "Please fill in Participant, Date, and Visit.")
+                        "Please enter a Participant Number.")
                     return
-
-                time_prefix = datetime.datetime.now().strftime(SESSION_TIME_FORMAT)
+                
+                # Format: YYYYMMDD_HHMMSS
+                time_prefix = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 self._session_time_prefix = time_prefix
 
                 try:
                     self._session_info = create_session(
-                        participant, date_str, visit,
-                        self.base_dir, time_prefix)
+                        participant, visit, self.base_dir, time_prefix)
                 except Exception as e:
                     QMessageBox.critical(self, "Session Error", str(e))
                     return
 
                 # Record session in participant DB
                 try:
-                    # Ensure participant exists
-                    if not self._participant_db.get_participant(participant):
-                        self._participant_db.add_participant(participant)
-                    self._participant_db.add_session_record(
-                        participant, date_str, visit,
-                        self._session_info.session_id)
+                    self._participant_db.add_session(
+                        participant, visit, self._session_info.session_id)
                 except Exception as e:
                     logger.warning(f"Failed to record session in DB: {e}")
 
@@ -790,7 +784,7 @@ class MainWindow(QMainWindow):
             self.btn_record.setText("Pause")
             self.btn_save.setEnabled(True)
             self.statusBar().showMessage(
-                f"Recording to {self._session_info.folder_path}")
+                f"Recording to {self.base_dir}")
         else:
             self.is_recording = False
             self.btn_record.setText("Record")
@@ -927,46 +921,11 @@ class MainWindow(QMainWindow):
     def _open_participant_dialog(self):
         dialog = ParticipantDialog(self._participant_db, self)
         dialog.participant_selected.connect(self._on_participant_selected)
-        dialog.session_resumed.connect(self._on_session_resume_requested)
         dialog.exec()
 
-    def _on_participant_selected(self, p_id, name, visit):
-        self.part_input.setText(p_id)
-        self.visit_input.setText(visit)
-        self.statusBar().showMessage(f"Participant: {p_id} — {name}")
-
-    def _on_session_resume_requested(self, folder_name):
-        folder_path = os.path.join(self.base_dir, folder_name)
-        try:
-            info = resume_session(folder_path)
-            self._session_info = info
-            self.part_input.setText(info.participant)
-            self.date_input.setText(info.date_str)
-            self.visit_input.setText(info.visit)
-            self.statusBar().showMessage(
-                f"Session resumed: {info.session_id}")
-
-            # Determine IMU columns from existing file
-            if self._imu_field_count == IMU_FIELD_COUNT_SHORT:
-                imu_cols = IMU_CSV_COLUMNS_SHORT
-            else:
-                imu_cols = IMU_CSV_COLUMNS_FULL
-
-            self._writer_queue = queue.Queue(maxsize=WRITER_QUEUE_MAXSIZE)
-            self._writer_thread = FileWriterThread(
-                self._writer_queue,
-                info.eit_path, info.imu_path, info.marker_path,
-                imu_columns=imu_cols)
-            self._writer_thread.writer_error.connect(self._on_writer_error)
-            self._writer_thread.queue_warning.connect(self._on_queue_warning)
-            self._writer_thread.session_saved.connect(self._on_session_saved)
-            self._writer_thread.rows_written.connect(self._on_rows_written)
-            self._writer_thread.start()
-
-            self.btn_save.setEnabled(True)
-
-        except ValueError as e:
-            QMessageBox.warning(self, "Resume Error", str(e))
+    def _on_participant_selected(self, p_num):
+        self.part_input.setText(p_num)
+        self.statusBar().showMessage(f"Selected Participant {p_num}")
 
     # ------------------------------------------------------------------
     # OTBioLab+ integration

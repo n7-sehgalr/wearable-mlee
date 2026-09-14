@@ -25,29 +25,39 @@ class SessionInfo:
     visit: str
     session_id: str
 
-def create_session(participant: str, date_str: str, visit: str, base_dir: str, time_prefix: str) -> SessionInfo:
-    """Create a new session directory and return SessionInfo."""
-    base_session_id = f"{participant}_{date_str}_{visit}_T{time_prefix}"
-    session_id = base_session_id
-    folder_path = os.path.join(base_dir, session_id)
+def create_session(participant_num: str, visit: str, base_dir: str, time_prefix: str) -> SessionInfo:
+    """Create session paths without a parent folder."""
+    # Ensure participant number is padded
+    p_num = str(participant_num).zfill(2)
     
-    counter = 2
-    while os.path.exists(folder_path):
-        session_id = f"{base_session_id}_{counter}"
-        folder_path = os.path.join(base_dir, session_id)
-        counter += 1
+    # Base directory is data\01_raw
+    ip_dir = os.path.join(base_dir, "IP")
+    imu_dir = os.path.join(base_dir, "IMU")
+    markers_dir = os.path.join(base_dir, "Markers")
+    
+    for d in (ip_dir, imu_dir, markers_dir):
+        os.makedirs(d, exist_ok=True)
         
-    os.makedirs(folder_path)
-    logger.info(f"Created new session folder: {folder_path}")
+    # Format: P<Number>_V<Visit>_<Device>_<DateTime>.csv
+    # Note: time_prefix is expected to be Date_Timestamp format
+    base_name = f"P{p_num}_V{visit}"
+    
+    eit_path = os.path.join(ip_dir, f"{base_name}_EIT_{time_prefix}.csv")
+    imu_path = os.path.join(imu_dir, f"{base_name}_IMU_{time_prefix}.csv")
+    marker_path = os.path.join(markers_dir, f"{base_name}_Markers_{time_prefix}.csv")
+    
+    session_id = f"{base_name}_{time_prefix}"
+    
+    logger.info(f"Created session files for: {session_id}")
     
     return SessionInfo(
-        folder_path=folder_path,
-        eit_path=os.path.join(folder_path, f"{session_id}_EIT.csv"),
-        imu_path=os.path.join(folder_path, f"{session_id}_IMU.csv"),
-        marker_path=os.path.join(folder_path, f"{session_id}_markers.csv"),
+        folder_path=base_dir,  # Not really used anymore, but keep for compat
+        eit_path=eit_path,
+        imu_path=imu_path,
+        marker_path=marker_path,
         is_resumed=False,
-        participant=participant,
-        date_str=date_str,
+        participant=p_num,
+        date_str=time_prefix,
         visit=visit,
         session_id=session_id
     )
