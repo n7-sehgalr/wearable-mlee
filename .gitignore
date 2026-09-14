@@ -2,12 +2,13 @@
 /data/
 /codeassist/
 /external/
+/hardware_schematics/
 
-src/sensors/ip/EIT-Device-Firmware/_build/*
-src/sensors/ip/EIT-Device-Firmware/drivers/cmsis/DSP
-src/sensors/ip/EIT-Device-Firmware/drivers/cmsis/NN
-src/sensors/ip/EIT-Device-Firmware/drivers/cmsis/RTOS
+src/sensors/ip/EIT-Device-Firmware/_build/
+/drivers/cmsis/DSP
+/drivers/cmsis/NN
+/drivers/cmsis/RTOS
 
-src/sensors/ip/EIT-Device-Firmware/env.cmd
+*env.cmd
 *.csv
 notebooks/
