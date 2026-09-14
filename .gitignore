@@ -4,7 +4,7 @@
 /external/
 /hardware_schematics/
 
-src/sensors/ip/EIT-Device-Firmware/_build/
+src/*/_build/
 /drivers/cmsis/DSP
 /drivers/cmsis/NN
 /drivers/cmsis/RTOS
