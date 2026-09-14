@@ -4,7 +4,8 @@ from PyQt6.QtCore import Qt
 
 from src.interfaces.desktop.constants import (
     EIT_SMOOTHING_METHOD, EIT_EMA_CUTOFF_HZ, EIT_MA_WINDOW_SAMPLES,
-    EIT_DISPLAY_MAX_POINTS, EIT_AUTOSCALE_PADDING, EIT_AUTOSCALE_MIN_RANGE,
+    EIT_DISPLAY_MAX_POINTS, EIT_DISPLAY_WINDOW_SECONDS,
+    EIT_AUTOSCALE_PADDING, EIT_AUTOSCALE_MIN_RANGE,
     EIT_AUTOSCALE_HYSTERESIS, EIT_RAW_CURVE_ALPHA,
     MARKER_COLORS, MARKER_MAX_VISIBLE_ANNOTATIONS,
 )
@@ -21,7 +22,8 @@ class DataPlotter(pg.PlotWidget):
     
     def __init__(self, title, labels=None, colors=None, max_points=500,
                  enable_smoothing=False, smoothing_method='ema',
-                 ema_cutoff_hz=0.8, ma_window=400):
+                 ema_cutoff_hz=0.8, ma_window=400,
+                 display_window_seconds=None):
         super().__init__()
         
         self.setTitle(title, color='w', size='10pt')
@@ -30,6 +32,7 @@ class DataPlotter(pg.PlotWidget):
         self.setLabel('bottom', 'Time', units='s')
         
         self.max_points = max_points
+        self.display_window_seconds = display_window_seconds
         self.enable_smoothing = enable_smoothing
         self.labels = labels or ["Data"]
         colors = colors or [(255, 0, 0)]
@@ -120,8 +123,14 @@ class DataPlotter(pg.PlotWidget):
         
         if len(t_data) == 0:
             return
-            
-        self.setXRange(t_data[0], t_data[-1], padding=0)
+        
+        # Set X range: fixed time window or full buffer
+        t_latest = t_data[-1]
+        if self.display_window_seconds is not None and t_latest > 0:
+            t_oldest = t_latest - self.display_window_seconds
+            self.setXRange(t_oldest, t_latest, padding=0)
+        else:
+            self.setXRange(t_data[0], t_latest, padding=0)
         
         all_y = []
         for label, curve in self.curves:
@@ -163,12 +172,16 @@ class DataPlotter(pg.PlotWidget):
         line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen(color, width=2, style=Qt.PenStyle.DashLine))
         line.setPos(t)
         
-        label = pg.TextItem(text=f"[{key.upper()}] {event}", color=color, anchor=(0, 1))
-        label.setParentItem(line)
-        label.setPos(0, 0)
+        label = pg.TextItem(text=f"[{key.upper()}]", color=color, anchor=(0.5, 1))
+        label.setFlag(label.GraphicsItemFlag.ItemClipsToShape, True)
         
         self.addItem(line)
-        self._marker_lines.append({'t': t, 'line': line})
+        self.addItem(label)
+        # Position label at top of visible Y range
+        vr = self.viewRange()
+        label.setPos(t, vr[1][1] if vr[1][1] != 0 else 1)
+        
+        self._marker_lines.append({'t': t, 'line': line, 'label': label})
         
     def cleanup_markers(self):
         """Remove marker annotations that are outside the visible X range."""
@@ -191,6 +204,8 @@ class DataPlotter(pg.PlotWidget):
                     
         for marker in to_remove:
             self.removeItem(marker['line'])
+            if 'label' in marker:
+                self.removeItem(marker['label'])
             self._marker_lines.remove(marker)
             
     def reset(self):
@@ -207,4 +222,6 @@ class DataPlotter(pg.PlotWidget):
         
         for marker in self._marker_lines:
             self.removeItem(marker['line'])
+            if 'label' in marker:
+                self.removeItem(marker['label'])
         self._marker_lines.clear()

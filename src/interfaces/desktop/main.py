@@ -51,7 +51,7 @@ from src.interfaces.desktop.constants import (
     RENDER_FPS, RENDER_INTERVAL_MS,
     MARKER_DEDUP_INTERVAL_MS, MARKER_RECENT_LOG_SIZE,
     MARKER_FEEDBACK_DURATION_MS,
-    EIT_DISPLAY_MAX_POINTS, IMU_DISPLAY_MAX_POINTS,
+    EIT_DISPLAY_MAX_POINTS, EIT_DISPLAY_WINDOW_SECONDS, IMU_DISPLAY_MAX_POINTS,
     EIT_SMOOTHING_METHOD, EIT_EMA_CUTOFF_HZ, EIT_MA_WINDOW_SAMPLES,
     WRITER_QUEUE_MAXSIZE, WRITER_SHUTDOWN_TIMEOUT_S,
     SESSION_TIME_FORMAT, SESSION_DATE_FORMAT,
@@ -361,6 +361,7 @@ class MainWindow(QMainWindow):
         self.lbl_recent_markers = QLabel("")
         self.lbl_recent_markers.setFont(QFont("Consolas", 8))
         self.lbl_recent_markers.setStyleSheet("color: #aaa;")
+        self.lbl_recent_markers.setWordWrap(True)
         self._recent_markers = []
         main_layout.addWidget(self.lbl_recent_markers)
 
@@ -374,7 +375,8 @@ class MainWindow(QMainWindow):
             enable_smoothing=True,
             smoothing_method=EIT_SMOOTHING_METHOD,
             ema_cutoff_hz=EIT_EMA_CUTOFF_HZ,
-            ma_window=EIT_MA_WINDOW_SAMPLES)
+            ma_window=EIT_MA_WINDOW_SAMPLES,
+            display_window_seconds=EIT_DISPLAY_WINDOW_SECONDS)
         self.plot_eit2 = DataPlotter(
             "EIT Channel 2 Magnitude",
             labels=["Mag 2"], colors=[(255, 0, 255)],
@@ -382,7 +384,8 @@ class MainWindow(QMainWindow):
             enable_smoothing=True,
             smoothing_method=EIT_SMOOTHING_METHOD,
             ema_cutoff_hz=EIT_EMA_CUTOFF_HZ,
-            ma_window=EIT_MA_WINDOW_SAMPLES)
+            ma_window=EIT_MA_WINDOW_SAMPLES,
+            display_window_seconds=EIT_DISPLAY_WINDOW_SECONDS)
 
         self.plot_imu_accel = DataPlotter(
             "IMU Linear Acceleration",
@@ -494,6 +497,9 @@ class MainWindow(QMainWindow):
             calib_file = os.path.join(os.path.dirname(__file__), "calibration.json")
             with open(calib_file, "w") as f:
                 json.dump({"offsets": offsets}, f)
+            if self.calib_dialog:
+                self.calib_dialog.show_offsets_saved(offsets)
+            self.statusBar().showMessage("✓ Calibration offsets saved to PC")
             return
             
         if clean_line.startswith("# CALIBRATION_LOAD_REQUEST"):
@@ -504,17 +510,31 @@ class MainWindow(QMainWindow):
                     offsets = data.get("offsets", "")
                     if offsets:
                         self.serial_worker.send_command(f"calibrate set {offsets}")
+                        if self.calib_dialog:
+                            self.calib_dialog.show_offsets_loaded(offsets)
+                        self.statusBar().showMessage("✓ Calibration offsets sent to firmware")
+                    else:
+                        if self.calib_dialog:
+                            self.calib_dialog.show_no_saved_calibration()
             except (FileNotFoundError, json.JSONDecodeError):
-                pass
+                if self.calib_dialog:
+                    self.calib_dialog.show_no_saved_calibration()
+                self.statusBar().showMessage("No saved calibration found")
             return
 
         if clean_line.startswith("# CALIBRATION SAVED"):
-            self.statusBar().showMessage("✓ Calibration saved to EEPROM")
+            self.statusBar().showMessage("✓ Calibration saved")
+            return
+
+        if clean_line.startswith("# CALIBRATION FAILED"):
+            if self.calib_dialog:
+                self.calib_dialog.show_save_failed()
+            self.statusBar().showMessage("✗ Calibration save failed — not fully calibrated")
             return
 
         if clean_line.startswith("# CALIBRATION LOADED"):
-            self.statusBar().showMessage("✓ Calibration loaded from EEPROM")
-            if self.calib_dialog and self.calib_dialog.isVisible():
+            self.statusBar().showMessage("✓ Calibration loaded into firmware")
+            if self.calib_dialog:
                 self.calib_dialog.show_loaded_status()
             return
 
