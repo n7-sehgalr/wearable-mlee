@@ -10,6 +10,7 @@ src/*/_build/
 /data/
 *env.cmd
 *.csv
-notebooks/
 *.egg-info
 info.log
+notebooks/*
+!notebooks/etl.ipynb
