@@ -7,7 +7,8 @@ src/*/_build/
 /drivers/cmsis/DSP
 /drivers/cmsis/NN
 /drivers/cmsis/RTOS
-/data/
+/data/*
+!data/RawData_NamingGuide.txt
 *env.cmd
 *.csv
 *.egg-info
