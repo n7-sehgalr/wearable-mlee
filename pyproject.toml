@@ -30,6 +30,7 @@ dependencies = [
     "scikit-learn~=1.5.1; python_version <= '3.10'",
     "scikit-learn~=1.8.0; python_version > '3.10'",
     "seaborn~=0.12.1",
+    "nbimporter>=0.3.4",
 ]
 
 [project.scripts]

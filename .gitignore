@@ -14,3 +14,4 @@ src/*/_build/
 info.log
 notebooks/*
 !notebooks/etl.ipynb
+!notebooks/groundtruth.ipynb
