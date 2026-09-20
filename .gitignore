@@ -1,4 +1,9 @@
 *__pycache__
+*.csv
+*.xlsx
+*.otb+
+*.mat
+*.db
 /codeassist/
 /external/
 /hardware_schematics/
@@ -9,8 +14,12 @@ src/*/_build/
 /drivers/cmsis/RTOS
 /data/*
 !data/RawData_NamingGuide.txt
+!/data/01_raw/
+!/data/01_raw/Lactate/
+!/data/01_raw/EXG/
+!/data/01_raw/Lactate/.gitkeep
+!/data/01_raw/EXG/.gitkeep
 *env.cmd
-*.csv
 *.egg-info
 info.log
 notebooks/*
