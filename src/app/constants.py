@@ -123,8 +123,7 @@ SESSION_DATE_FORMAT = "%Y%m%d"
 # Data directories
 # ======================================================================
 DEFAULT_DATA_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__),
-                 "..", "..", "..", "data", "01_raw")
+    "C:/Codebase/wearable-mlee/data/01_raw"
 )
 
 # Participant database

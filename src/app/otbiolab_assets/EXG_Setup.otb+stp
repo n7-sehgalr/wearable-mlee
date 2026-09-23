@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Device Name="QUATTROCENTO" DeviceTotalChannels="112" Model="40096" IPAddress="169.254.1.10" AnalogOutConn="0" AnalogOutCh="0" AnalogOutGain="1" Sources="1" SampleFrequency="2048" Firmware="Unknown">
+  <Channels>
+    <Adapter ID="AD8x2JD" Description="16 channels bipolar adapter" DetectionMode="2" LowPassFilter="1" HighPassFilter="0" Gain="5" AdapterIndex="0" ChannelStartIndex="0">
+      <Channel ID="General" Prefix="IN 1 (Channel 1) - " Description="General purpose sensor" Gain="1" Index="0" Muscle="Latissimus Dorsi" Side="Right" />
+      <Channel ID="General" Prefix="IN 1 (Channel 2) - " Description="General purpose sensor" Gain="1" Index="1" Muscle="Pectoralis Major" Side="Left" />
+    </Adapter>
+    <Adapter ID="AdapterControl" Description="AdapterControl" DetectionMode="0" LowPassFilter="0" HighPassFilter="0" Gain="1" AdapterIndex="19" ChannelStartIndex="112">
+      <Channel ID="RampChannel" Prefix="" Description="Ramp Channel" Gain="1" Index="0" Muscle="Not defined" Side="Not Defined" />
+    </Adapter>
+    <Adapter ID="AdapterControl" Description="AdapterControl" DetectionMode="0" LowPassFilter="0" HighPassFilter="0" Gain="1" AdapterIndex="20" ChannelStartIndex="113">
+      <Channel ID="BufferChannel" Prefix="" Description="Buffer Channel" Gain="1" Index="0" Muscle="Not defined" Side="Not Defined" />
+    </Adapter>
+    <Adapter ID="AdapterControl" Description="AdapterControl" DetectionMode="0" LowPassFilter="0" HighPassFilter="0" Gain="1" AdapterIndex="21" ChannelStartIndex="114">
+      <Channel ID="AUX  Acceleration" Prefix="" Description="Accelerometer Transducer" Gain="1" Index="0" Muscle="Not defined" Side="Not Defined" />
+    </Adapter>
+    <Adapter ID="AdapterControl" Description="AdapterControl" DetectionMode="0" LowPassFilter="0" HighPassFilter="0" Gain="1" AdapterIndex="22" ChannelStartIndex="115">
+      <Channel ID="AUX  Acceleration" Prefix="" Description="Accelerometer Transducer" Gain="1" Index="0" Muscle="Not defined" Side="Not Defined" />
+    </Adapter>
+    <Adapter ID="AdapterControl" Description="AdapterControl" DetectionMode="0" LowPassFilter="0" HighPassFilter="0" Gain="1" AdapterIndex="23" ChannelStartIndex="116">
+      <Channel ID="AUX  Acceleration" Prefix="" Description="Accelerometer Transducer" Gain="1" Index="0" Muscle="Not defined" Side="Not Defined" />
+    </Adapter>
+    <Adapter ID="AdapterControl" Description="AdapterControl" DetectionMode="0" LowPassFilter="0" HighPassFilter="0" Gain="1" AdapterIndex="24" ChannelStartIndex="117">
+      <Channel ID="AUX  Acceleration" Prefix="" Description="Accelerometer Transducer" Gain="1" Index="0" Muscle="Not defined" Side="Not Defined" />
+    </Adapter>
+    <Adapter ID="AdapterControl" Description="AdapterControl" DetectionMode="0" LowPassFilter="0" HighPassFilter="0" Gain="1" AdapterIndex="25" ChannelStartIndex="118">
+      <Channel ID="AUX  Acceleration" Prefix="" Description="Accelerometer Transducer" Gain="1" Index="0" Muscle="Not defined" Side="Not Defined" />
+    </Adapter>
+    <Adapter ID="AdapterControl" Description="AdapterControl" DetectionMode="0" LowPassFilter="0" HighPassFilter="0" Gain="1" AdapterIndex="26" ChannelStartIndex="119">
+      <Channel ID="AUX  Acceleration" Prefix="" Description="Accelerometer Transducer" Gain="1" Index="0" Muscle="Not defined" Side="Not Defined" />
+    </Adapter>
+  </Channels>
+</Device>
