@@ -44,7 +44,8 @@ from src.app.constants import (
     TAG_EIT, TAG_IMU, TAG_MARKER, TAG_SHUTDOWN,
     EIT_CSV_COLUMNS, IMU_CSV_COLUMNS_SHORT, IMU_CSV_COLUMNS_FULL,
     MARKER_CSV_COLUMNS,
-    EIT_FIELD_COUNT, IMU_FIELD_COUNT_SHORT, IMU_FIELD_COUNT_FULL,
+    EIT_FIELD_COUNT, EIT_FIELD_COUNT_LEGACY,
+    IMU_FIELD_COUNT_SHORT, IMU_FIELD_COUNT_FULL,
     COMBINED_FIELD_COUNT_OLD,
     SERIAL_BAUDRATE, SERIAL_QUEUE_MAXLEN, SERIAL_READ_TIMEOUT,
     RECONNECT_INTERVAL_MS, RECONNECT_MAX_ATTEMPTS,
@@ -127,12 +128,17 @@ class SerialWorker(QThread):
                             lines_raw = buffer.split(b'\n')
                             buffer = bytearray(lines_raw.pop()) # keep remainder
                             
-                            wall_ts = datetime.datetime.now().isoformat()
                             new_lines = []
                             for raw in lines_raw:
                                 try:
                                     line = raw.decode('utf-8', errors='replace').strip()
                                     if line:
+                                        # Timestamp each line independently. A
+                                        # read() may contain many complete lines;
+                                        # assigning one timestamp to the whole
+                                        # chunk makes saved wall time appear to
+                                        # pause and then jump.
+                                        wall_ts = datetime.datetime.now().isoformat()
                                         new_lines.append((wall_ts, line))
                                 except Exception:
                                     pass
@@ -545,12 +551,14 @@ class MainWindow(QMainWindow):
         parts = clean_line.split(',')
         nfields = len(parts)
 
-        # ---- EIT packet (3 columns) ----
-        if nfields == EIT_FIELD_COUNT:
+        # ---- EIT packet (5 columns; accept legacy 3-column firmware) ----
+        if nfields in (EIT_FIELD_COUNT, EIT_FIELD_COUNT_LEGACY):
             try:
                 ts = float(parts[0])
                 mag1 = float(parts[1])
                 mag2 = float(parts[2])
+                phase1 = float(parts[3]) if nfields == EIT_FIELD_COUNT else None
+                phase2 = float(parts[4]) if nfields == EIT_FIELD_COUNT else None
             except ValueError:
                 self.skipped_line_count += 1
                 return
@@ -565,7 +573,9 @@ class MainWindow(QMainWindow):
 
             if self.is_recording and self._writer_queue is not None:
                 row = [parts[0].strip(), wall_ts,
-                       parts[1].strip(), parts[2].strip()]
+                       parts[1].strip(), parts[2].strip(),
+                       parts[3].strip() if phase1 is not None else '',
+                       parts[4].strip() if phase2 is not None else '']
                 try:
                     self._writer_queue.put_nowait((TAG_EIT, row))
                 except queue.Full:
@@ -643,7 +653,7 @@ class MainWindow(QMainWindow):
 
             if self.is_recording and self._writer_queue is not None:
                 eit_row = [parts[0].strip(), wall_ts,
-                           parts[1].strip(), parts[2].strip()]
+                           parts[1].strip(), parts[2].strip(), '', '']
                 imu_row = [parts[0].strip(), wall_ts] + [p.strip() for p in parts[3:]]
                 try:
                     self._writer_queue.put_nowait((TAG_EIT, eit_row))

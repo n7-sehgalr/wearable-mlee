@@ -57,6 +57,8 @@ extern "C" void initialise_monitor_handles(void);
 // 'volatile' is used because they are updated frequently in the main loop.
 volatile float g_fImpedanceMagnitude1 = 0.0f;
 volatile float g_fImpedanceMagnitude2 = 0.0f;
+volatile float g_fImpedancePhase1 = 0.0f;
+volatile float g_fImpedancePhase2 = 0.0f;
 
 // Create an instance of the BNO055 sensor object.
 // - The first parameter (55) is an arbitrary but unique sensor ID.
@@ -252,7 +254,7 @@ extern "C" void __attribute__((interrupt("IRQ"))) ADC0_IRQHandler()
     BOARD_ADCFLG_TOGGLE();    
 }
 
-void adc_collect_samples(uint32_t * sample_array, uint8_t samples)
+void adc_collect_samples(uint32_t * sample_array, uint16_t samples)
 {
     g_bWaitForResults = true;
         /* Setup transfer */

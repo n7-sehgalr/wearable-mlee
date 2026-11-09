@@ -33,7 +33,10 @@ MARKER_COLORS = {
 # ======================================================================
 # CSV column schemas
 # ======================================================================
-EIT_CSV_COLUMNS = ['timestamp_us', 'wall_timestamp', 'mag1', 'mag2']
+EIT_CSV_COLUMNS = [
+    'timestamp_us', 'wall_timestamp',
+    'mag1', 'mag2', 'phase1_rad', 'phase2_rad',
+]
 
 # Old 7-column IMU (orientation + linear accel only)
 IMU_CSV_COLUMNS_SHORT = [
@@ -132,7 +135,8 @@ PARTICIPANT_DB_FILENAME = "participants.db"
 # ======================================================================
 # Firmware packet field counts (for auto-detection)
 # ======================================================================
-EIT_FIELD_COUNT = 3                    # timestamp, mag1, mag2
+EIT_FIELD_COUNT = 5                    # timestamp, mag1, mag2, phase1, phase2
+EIT_FIELD_COUNT_LEGACY = 3             # timestamp, mag1, mag2
 IMU_FIELD_COUNT_SHORT = 7              # timestamp + 6 vals (old firmware)
 IMU_FIELD_COUNT_FULL = 17              # timestamp + 16 vals (new firmware)
 COMBINED_FIELD_COUNT_OLD = 9           # legacy combined format

@@ -1,9 +1,13 @@
 
-void adc_collect_samples(uint32_t * sample_array, uint8_t samples);
+void adc_collect_samples(uint32_t * sample_array, uint16_t samples);
 
 
 // eit_iq_demodulation ( const_cast<&g_aiSamples[g_iSample_rubbish]>, g_iSamples_useful, g_iSamples_per_cycle);
-float eit_iq_demodulation(uint32_t const * sample_array, uint8_t length, uint8_t samples_per_period, bool print_info = false)
+float eit_iq_demodulation(uint32_t const * sample_array,
+                          uint16_t length,
+                          uint16_t samples_per_period,
+                          bool print_info = false,
+                          float * phase_out = nullptr)
 {
     float s_cum=0;
     float i_cum=0;
@@ -26,7 +30,15 @@ float eit_iq_demodulation(uint32_t const * sample_array, uint8_t length, uint8_t
     float q_mean = ( q_cum / length ) ;
  
     float magnitude = 2 * sqrt(pow(i_mean,2) + pow(q_mean,2));
-    float phase = atan(q_mean/i_mean);
+    // atan2 preserves the phase quadrant.  The previous atan(q/i) result
+    // folded channels with a negative in-phase component into the wrong
+    // half of the circle.
+    float phase = atan2(q_mean, i_mean);
+
+    if (phase_out != nullptr)
+    {
+        *phase_out = phase;
+    }
 
     // if ( print_info )
     // {
@@ -109,7 +121,6 @@ void sample_and_send_data()
         Serial.println(mag_cal);
     }
     
-    Serial.flush(); // Flush to ensure data is sent immediately
 }
 
 void collect_eit_frame()
@@ -133,7 +144,9 @@ void collect_eit_frame()
         g_fImpedanceMagnitude1 = eit_iq_demodulation ( 
             const_cast<uint32_t const * >(&g_aiSamples[g_iSample_rubbish]), // Ignore "rubbish" samples.
             g_iSamples_useful, 
-            g_iSamples_per_cycle);
+            g_iSamples_per_cycle,
+            false,
+            const_cast<float *>(&g_fImpedancePhase1));
     
         // --- Measure Impedance Channel 2 ---
         // Connect the selected sensing pair for the second channel
@@ -143,13 +156,18 @@ void collect_eit_frame()
         g_fImpedanceMagnitude2 = eit_iq_demodulation ( 
             const_cast<uint32_t const * >(&g_aiSamples[g_iSample_rubbish]),
             g_iSamples_useful, 
-            g_iSamples_per_cycle);
+            g_iSamples_per_cycle,
+            false,
+            const_cast<float *>(&g_fImpedancePhase2));
 
         // --- Stream EIT Data Immediately ---
+        // Format: timestamp_us,mag1,mag2,phase1_rad,phase2_rad
+        // Leave USB output buffered so flushing does not throttle acquisition.
         unsigned long currentTime = micros();
         Serial.print(currentTime); Serial.print(",");
         Serial.print(g_fImpedanceMagnitude1, 4); Serial.print(",");
-        Serial.print(g_fImpedanceMagnitude2, 4);
+        Serial.print(g_fImpedanceMagnitude2, 4); Serial.print(",");
+        Serial.print(g_fImpedancePhase1, 4); Serial.print(",");
+        Serial.print(g_fImpedancePhase2, 4);
         Serial.println();
-        Serial.flush();
     }

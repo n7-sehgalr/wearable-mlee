@@ -131,6 +131,8 @@ volatile uint32_t g_aiSamples[g_iSamples_max];
 // EIT Data
 extern volatile float g_fImpedanceMagnitude1;
 extern volatile float g_fImpedanceMagnitude2;
+extern volatile float g_fImpedancePhase1;
+extern volatile float g_fImpedancePhase2;
 
 
 // IMU
